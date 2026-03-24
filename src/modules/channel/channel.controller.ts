@@ -205,8 +205,10 @@ export class ChannelController {
       const { channelInfo } =
         await this.spotifyService.fetchSpotifyShow(spotifyUrl);
 
-      const feedUrl =
-        await this.applePodcastsService.getRssFeedFromSpotify(spotifyUrl);
+      const feedUrl = await this.applePodcastsService.getRssFeedFromSpotify(
+        spotifyUrl,
+        channelInfo.title,
+      );
 
       const showIdMatch = spotifyUrl.match(/show\/([a-zA-Z0-9]+)/);
       const showId = showIdMatch ? showIdMatch[1] : channelInfo.id;
@@ -232,7 +234,27 @@ export class ChannelController {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      throw new HttpException(message, HttpStatus.NOT_FOUND);
+
+      if (message.includes('Active premium subscription required')) {
+        throw new HttpException(
+          'Spotify API access denied: app owner needs an active Premium subscription.',
+          HttpStatus.FORBIDDEN,
+        );
+      }
+
+      if (message.includes('Failed to get Spotify token')) {
+        throw new HttpException(message, HttpStatus.UNAUTHORIZED);
+      }
+
+      if (
+        message.includes('Podcast not found on Apple Podcasts') ||
+        message.includes('No matching podcast found') ||
+        message.includes('RSS feed URL not available')
+      ) {
+        throw new HttpException(message, HttpStatus.NOT_FOUND);
+      }
+
+      throw new HttpException(message, HttpStatus.BAD_GATEWAY);
     }
   }
 

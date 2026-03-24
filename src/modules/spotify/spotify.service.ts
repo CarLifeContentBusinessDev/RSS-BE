@@ -83,11 +83,14 @@ export class SpotifyService {
 
       // 1. 쇼(Podcast) 기본 정보 가져오기 (market fallback)
       for (const market of this.SPOTIFY_MARKETS) {
-        const showRes = await fetch(this.buildSpotifyUrl(`shows/${showId}`, market), {
-          headers: {
-            Authorization: `Bearer ${token}`,
+        const showRes = await fetch(
+          this.buildSpotifyUrl(`shows/${showId}`, market),
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
           },
-        });
+        );
 
         if (showRes.ok) {
           showData = (await showRes.json()) as SpotifyShow;
@@ -96,11 +99,15 @@ export class SpotifyService {
         }
 
         const errorText = await showRes.text();
-        showErrors.push(`${market}: ${showRes.status} ${showRes.statusText} ${errorText}`);
+        showErrors.push(
+          `${market}: ${showRes.status} ${showRes.statusText} ${errorText}`,
+        );
       }
 
       if (!showData) {
-        throw new Error(`Failed to fetch show for all markets. ${showErrors.join(' | ')}`);
+        throw new Error(
+          `Failed to fetch show for all markets. ${showErrors.join(' | ')}`,
+        );
       }
 
       const channelInfo = {

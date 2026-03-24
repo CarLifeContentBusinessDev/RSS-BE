@@ -63,23 +63,31 @@ export class ApplePodcastsService {
     return results[0];
   }
 
-  async getRssFeedFromSpotify(spotifyUrl: string): Promise<string> {
+  async getRssFeedFromSpotify(
+    spotifyUrl: string,
+    showName?: string,
+  ): Promise<string> {
     try {
-      const { channelInfo } =
-        await this.spotifyService.fetchSpotifyShow(spotifyUrl);
+      let resolvedShowName = showName;
 
-      if (!channelInfo || !channelInfo.title) {
-        throw new Error('Failed to extract show name from Spotify');
+      if (!resolvedShowName) {
+        const { channelInfo } =
+          await this.spotifyService.fetchSpotifyShow(spotifyUrl);
+
+        if (!channelInfo || !channelInfo.title) {
+          throw new Error('Failed to extract show name from Spotify');
+        }
+
+        resolvedShowName = channelInfo.title;
       }
 
-      const showName = channelInfo.title;
-      const searchResults = await this.searchPodcast(showName);
+      const searchResults = await this.searchPodcast(resolvedShowName);
 
       if (searchResults.length === 0) {
         throw new Error('Podcast not found on Apple Podcasts');
       }
 
-      const bestMatch = this.findBestMatch(showName, searchResults);
+      const bestMatch = this.findBestMatch(resolvedShowName, searchResults);
 
       if (!bestMatch) {
         throw new Error('No matching podcast found');
