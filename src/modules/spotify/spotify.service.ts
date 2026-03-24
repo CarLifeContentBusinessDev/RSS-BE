@@ -10,35 +10,59 @@ import {
 export class SpotifyService {
   private readonly SPOTIFY_CLIENT_ID: string;
   private readonly SPOTIFY_CLIENT_SECRET: string;
+  private readonly SPOTIFY_MARKETS: string[];
 
   constructor() {
     this.SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID || '';
     this.SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET || '';
+    this.SPOTIFY_MARKETS = (process.env.SPOTIFY_MARKETS || 'KR,US')
+      .split(',')
+      .map((market) => market.trim().toUpperCase())
+      .filter(Boolean);
   }
 
+  private buildSpotifyUrl(path: string, market?: string, query = ''): string {
+    const params = new URLSearchParams(query);
+    if (market) {
+      params.set('market', market);
+    }
+
+    const queryString = params.toString();
+    if (!queryString) {
+      return `https://api.spotify.com/v1/${path}`;
+    }
+
+    return `https://api.spotify.com/v1/${path}?${queryString}`;
+  }
+
+  /**
+   * Spotify Access Token을 발급받습니다. (Client Credentials Flow)
+   */
   private async getSpotifyToken(): Promise<string> {
-    const params = new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: this.SPOTIFY_CLIENT_ID,
-      client_secret: this.SPOTIFY_CLIENT_SECRET,
-    });
+    // Client ID와 Secret을 Base64로 인코딩하여 인증 헤더 생성
+    const auth = Buffer.from(
+      `${this.SPOTIFY_CLIENT_ID}:${this.SPOTIFY_CLIENT_SECRET}`,
+    ).toString('base64');
 
     const res = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
       headers: {
+        Authorization: `Basic ${auth}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: params.toString(),
+      body: 'grant_type=client_credentials',
     });
 
     if (!res.ok) {
+      const errorText = await res.text();
+      console.error('Spotify Token Error:', errorText);
       throw new Error(
         `Failed to get Spotify token: ${res.status} ${res.statusText}`,
       );
     }
 
-    const { access_token: token } = (await res.json()) as SpotifyToken;
-    return token;
+    const data = (await res.json()) as SpotifyToken;
+    return data.access_token;
   }
 
   private extractShowId(url: string): string {
@@ -53,23 +77,31 @@ export class SpotifyService {
     try {
       const showId = this.extractShowId(showUrl);
       const token = await this.getSpotifyToken();
+      let showData: SpotifyShow | null = null;
+      let selectedMarket = this.SPOTIFY_MARKETS[0] || 'US';
+      const showErrors: string[] = [];
 
-      const showRes = await fetch(
-        `https://api.spotify.com/v1/shows/${showId}`,
-        {
+      // 1. 쇼(Podcast) 기본 정보 가져오기 (market fallback)
+      for (const market of this.SPOTIFY_MARKETS) {
+        const showRes = await fetch(this.buildSpotifyUrl(`shows/${showId}`, market), {
           headers: {
             Authorization: `Bearer ${token}`,
           },
-        },
-      );
+        });
 
-      if (!showRes.ok) {
-        throw new Error(
-          `Failed to fetch show: ${showRes.status} ${showRes.statusText}`,
-        );
+        if (showRes.ok) {
+          showData = (await showRes.json()) as SpotifyShow;
+          selectedMarket = market;
+          break;
+        }
+
+        const errorText = await showRes.text();
+        showErrors.push(`${market}: ${showRes.status} ${showRes.statusText} ${errorText}`);
       }
 
-      const showData = (await showRes.json()) as SpotifyShow;
+      if (!showData) {
+        throw new Error(`Failed to fetch show for all markets. ${showErrors.join(' | ')}`);
+      }
 
       const channelInfo = {
         id: showId,
@@ -89,28 +121,46 @@ export class SpotifyService {
         type: 'spotify',
       };
 
+      // 2. 에피소드 목록 가져오기 (Paging 처리)
       let allEpisodes: SpotifyEpisode[] = [];
       let offset = 0;
       const limit = 50;
       const totalEpisodes = showData.total_episodes || 0;
 
       while (offset < totalEpisodes) {
-        const episodesRes = await fetch(
-          `https://api.spotify.com/v1/shows/${showId}/episodes?limit=${limit}&offset=${offset}`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          },
-        );
+        let episodesData: SpotifyEpisodesPage | null = null;
+        const episodeErrors: string[] = [];
 
-        if (!episodesRes.ok) {
-          throw new Error(
-            `Failed to fetch episodes at offset ${offset}: ${episodesRes.status} ${episodesRes.statusText}`,
+        for (const market of [selectedMarket, ...this.SPOTIFY_MARKETS]) {
+          const episodesRes = await fetch(
+            this.buildSpotifyUrl(
+              `shows/${showId}/episodes`,
+              market,
+              `limit=${limit}&offset=${offset}`,
+            ),
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          );
+
+          if (episodesRes.ok) {
+            episodesData = (await episodesRes.json()) as SpotifyEpisodesPage;
+            break;
+          }
+
+          const errorText = await episodesRes.text();
+          episodeErrors.push(
+            `${market}: ${episodesRes.status} ${episodesRes.statusText} ${errorText}`,
           );
         }
 
-        const episodesData = (await episodesRes.json()) as SpotifyEpisodesPage;
+        if (!episodesData) {
+          throw new Error(
+            `Failed to fetch episodes at offset ${offset}. ${episodeErrors.join(' | ')}`,
+          );
+        }
 
         if (!episodesData.items || episodesData.items.length === 0) {
           break;
@@ -119,11 +169,13 @@ export class SpotifyService {
         allEpisodes = allEpisodes.concat(episodesData.items);
         offset += limit;
 
+        // API 과부하 방지를 위한 아주 짧은 대기
         if (offset < totalEpisodes) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, 50));
         }
       }
 
+      // 3. 데이터 포맷팅
       const episodes = allEpisodes.map((episode) => ({
         id: episode.id,
         title: episode.name || 'Untitled Episode',

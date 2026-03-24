@@ -3,11 +3,14 @@ import { Injectable } from '@nestjs/common';
 import { r2Config } from 'src/common/config/r2.config';
 import { VideoInfo } from 'src/types/youtube.types';
 import { Readable } from 'stream';
-import { spawn } from 'child_process';
 import ytpl from 'ytpl';
 import { ChannelDbService } from 'src/shared/services/channel-db.service';
 import type { Json } from 'src/types/database.types';
 import { Video } from 'src/types/channel.types';
+import YTDlpWrap from 'yt-dlp-wrap';
+import { access, chmod, mkdir } from 'fs/promises';
+import { constants } from 'fs';
+import { join } from 'path';
 
 interface YtDlpVideoInfo {
   id: string;
@@ -42,6 +45,9 @@ function parseYouTubeDate(dateStr: string | undefined): string {
 @Injectable()
 export class YoutubeService {
   private s3Client: S3Client;
+  private readonly ytDlpCommand: string;
+  private ytDlpWrap: YTDlpWrap | null = null;
+  private ytDlpInitPromise: Promise<void> | null = null;
 
   constructor(private readonly channelDbService: ChannelDbService) {
     if (
@@ -60,6 +66,79 @@ export class YoutubeService {
         secretAccessKey: r2Config.secretAccessKey,
       },
     });
+
+    this.ytDlpCommand = process.env.YT_DLP_PATH || 'yt-dlp';
+  }
+
+  private async fileExists(path: string): Promise<boolean> {
+    try {
+      await access(path, constants.F_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async tryUseYtDlpBinary(binaryPath: string): Promise<boolean> {
+    try {
+      const wrapper = new YTDlpWrap(binaryPath);
+      await wrapper.getVersion();
+      this.ytDlpWrap = wrapper;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async resolveYtDlpWrap(): Promise<YTDlpWrap> {
+    if (this.ytDlpWrap) {
+      return this.ytDlpWrap;
+    }
+
+    if (!this.ytDlpInitPromise) {
+      this.ytDlpInitPromise = (async () => {
+        if (await this.tryUseYtDlpBinary(this.ytDlpCommand)) {
+          return;
+        }
+
+        const cacheDir =
+          process.env.YT_DLP_CACHE_DIR ||
+          join(process.cwd(), '.cache', 'yt-dlp');
+        const binaryName =
+          process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+        const binaryPath = join(cacheDir, binaryName);
+
+        await mkdir(cacheDir, { recursive: true });
+
+        if (!(await this.fileExists(binaryPath))) {
+          await YTDlpWrap.downloadFromGithub(binaryPath);
+          if (process.platform !== 'win32') {
+            await chmod(binaryPath, 0o755);
+          }
+        }
+
+        if (!(await this.tryUseYtDlpBinary(binaryPath))) {
+          throw new Error(
+            `Failed to initialize yt-dlp. Set YT_DLP_PATH or allow download to ${binaryPath}.`,
+          );
+        }
+      })()
+        .catch((error) => {
+          this.ytDlpWrap = null;
+          throw error;
+        })
+        .finally(() => {
+          this.ytDlpInitPromise = null;
+        });
+    }
+
+    await this.ytDlpInitPromise;
+
+    if (!this.ytDlpWrap) {
+      throw new Error('yt-dlp is not initialized');
+    }
+
+    return this.ytDlpWrap;
   }
 
   private getUrlType(
@@ -115,59 +194,38 @@ export class YoutubeService {
   }
 
   private async getVideoInfo(videoId: string): Promise<VideoInfo> {
-    return new Promise((resolve, reject) => {
-      const ytdlp = spawn('yt-dlp', [
+    try {
+      const ytDlpWrap = await this.resolveYtDlpWrap();
+      const output = await ytDlpWrap.execPromise([
         '--dump-json',
         '--no-playlist',
         `https://www.youtube.com/watch?v=${videoId}`,
       ]);
 
-      let output = '';
-      let errorOutput = '';
-
-      ytdlp.stdout.on('data', (data: Buffer) => {
-        output += data.toString();
-      });
-
-      ytdlp.stderr.on('data', (data: Buffer) => {
-        errorOutput += data.toString();
-      });
-
-      ytdlp.on('close', (code) => {
-        if (code !== 0) {
-          console.error('yt-dlp error:', errorOutput);
-          reject(new Error(`yt-dlp exited with code ${code}`));
-          return;
-        }
-
-        try {
-          const info = JSON.parse(output) as YtDlpVideoInfo;
-          resolve({
-            videoId: info.id,
-            title: info.title,
-            description: info.description || null,
-            thumbnail: info.thumbnail,
-            author: info.uploader || info.channel || 'Unknown',
-            publishedAt: parseYouTubeDate(info.upload_date),
-            audioUrl: '',
-            audioSize: 0,
-            duration: info.duration || 0,
-            tags: info.tags || [],
-            category: info.categories?.[0] || undefined,
-          });
-        } catch (error) {
-          reject(
-            error instanceof Error
-              ? error
-              : new Error('Failed to parse video info'),
-          );
-        }
-      });
-    });
+      const info = JSON.parse(output) as YtDlpVideoInfo;
+      return {
+        videoId: info.id,
+        title: info.title,
+        description: info.description || null,
+        thumbnail: info.thumbnail,
+        author: info.uploader || info.channel || 'Unknown',
+        publishedAt: parseYouTubeDate(info.upload_date),
+        audioUrl: '',
+        audioSize: 0,
+        duration: info.duration || 0,
+        tags: info.tags || [],
+        category: info.categories?.[0] || undefined,
+      };
+    } catch (error) {
+      throw new Error(
+        `Failed to execute yt-dlp. ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
-  private getAudioStream(videoUrl: string): Readable {
-    const ytdlp = spawn('yt-dlp', [
+  private async getAudioStream(videoUrl: string): Promise<Readable> {
+    const ytDlpWrap = await this.resolveYtDlpWrap();
+    return ytDlpWrap.execStream([
       '-f',
       'bestaudio',
       '-o',
@@ -175,8 +233,6 @@ export class YoutubeService {
       '--no-playlist',
       videoUrl,
     ]);
-
-    return ytdlp.stdout;
   }
 
   async uploadAudio(
@@ -186,11 +242,16 @@ export class YoutubeService {
     const audioName = `${process.env.DOWNLOAD_FOLDER}/${videoId}.mp3`;
 
     try {
-      const audioStream = this.getAudioStream(videoUrl);
-      const chunks: Buffer[] = [];
+      const audioStream = await this.getAudioStream(videoUrl);
+      const chunks: Uint8Array[] = [];
 
       for await (const chunk of audioStream) {
-        chunks.push(Buffer.from(chunk));
+        if (typeof chunk === 'string') {
+          chunks.push(Buffer.from(chunk));
+          continue;
+        }
+
+        chunks.push(chunk as Uint8Array);
       }
       const buffer = Buffer.concat(chunks);
 

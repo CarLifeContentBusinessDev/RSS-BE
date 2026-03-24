@@ -5,6 +5,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -233,5 +234,10 @@ export class ChannelController {
       const message = error instanceof Error ? error.message : 'Unknown error';
       throw new HttpException(message, HttpStatus.NOT_FOUND);
     }
+  }
+
+  @Get('spotify/find-rss')
+  async findSpotifyRssByQuery(@Query('spotifyUrl') spotifyUrl: string) {
+    return this.findSpotifyRss({ spotifyUrl });
   }
 }

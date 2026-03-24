@@ -90,6 +90,12 @@ R2_BUCKET_NAME=your_bucket_name
 R2_PUBLIC_URL=https://your-r2-domain.com
 DOWNLOAD_FOLDER=youtube
 
+# Optional: YouTube 실행 바이너리 경로 (직접 설치한 경우)
+YT_DLP_PATH=/usr/local/bin/yt-dlp
+
+# Optional: yt-dlp 자동 다운로드 캐시 경로
+YT_DLP_CACHE_DIR=/app/.cache/yt-dlp
+
 # Base Url
 FRONTEND_URL=your-published-domain
 ```
@@ -256,6 +262,10 @@ YouTube 기능은 다음 이유로 프로덕션 사용을 권장하지 않습니
 - 저작권 문제
 - 높은 처리 시간 (플레이리스트 100개 = 1-3시간)
 - 높은 저장 공간 비용
+
+실행 관련 참고:
+- 현재 서버는 `YT_DLP_PATH`가 없으면 `yt-dlp-wrap`을 통해 바이너리를 자동 준비합니다.
+- 배포 환경에서 GitHub 접근이 제한되면 자동 다운로드가 실패할 수 있으므로 `YT_DLP_PATH`로 고정 경로를 지정하는 것을 권장합니다.
 
 #### YouTube URL 처리
 
