@@ -2,15 +2,15 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Injectable } from '@nestjs/common';
 import { r2Config } from 'src/common/config/r2.config';
 import { VideoInfo } from 'src/types/youtube.types';
-import { Readable } from 'stream';
 import ytpl from 'ytpl';
 import { ChannelDbService } from 'src/shared/services/channel-db.service';
 import type { Json } from 'src/types/database.types';
 import { Video } from 'src/types/channel.types';
 import YTDlpWrap from 'yt-dlp-wrap';
-import { access, chmod, mkdir } from 'fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm } from 'fs/promises';
 import { constants } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
 interface YtDlpVideoInfo {
   id: string;
@@ -24,6 +24,49 @@ interface YtDlpVideoInfo {
   tags?: string[];
   categories?: string[];
 }
+
+interface YtDlpChannelEntry {
+  id?: string;
+}
+
+interface YtDlpChannelInfo {
+  id?: string;
+  title?: string;
+  uploader?: string;
+  channel?: string;
+  uploader_id?: string;
+  channel_id?: string;
+  description?: string;
+  thumbnail?: string;
+  entries?: YtDlpChannelEntry[];
+}
+
+export type YoutubeProgressEvent =
+  | { type: 'start'; total: number }
+  | { type: 'video_start'; current: number; total: number; videoId: string }
+  | {
+      type: 'video_done';
+      current: number;
+      total: number;
+      videoId: string;
+      title: string;
+    }
+  | {
+      type: 'video_skip';
+      current: number;
+      total: number;
+      videoId: string;
+      reason: string;
+    }
+  | {
+      type: 'complete';
+      success: number;
+      failed: number;
+      total: number;
+      rssUrl: string;
+    };
+
+export type ProgressCallback = (event: YoutubeProgressEvent) => void;
 
 function parseYouTubeDate(dateStr: string | undefined): string {
   if (!dateStr || dateStr.length !== 8) {
@@ -150,7 +193,8 @@ export class YoutubeService {
     if (
       url.includes('/channel/') ||
       url.includes('/@') ||
-      url.includes('/c/')
+      url.includes('/c/') ||
+      url.includes('/user/')
     ) {
       return 'channel';
     }
@@ -187,10 +231,89 @@ export class YoutubeService {
         videoIds,
       };
     } catch (error) {
+      return this.getCollectionInfoByYtDlp(url, 'playlist', error);
+    }
+  }
+
+  private async getCollectionInfoByYtDlp(
+    url: string,
+    type: 'playlist' | 'channel',
+    fallbackError?: unknown,
+  ): Promise<{
+    channelInfo: {
+      id: string;
+      title: string;
+      url: string;
+      thumbnail?: string;
+      author?: string;
+      description?: string;
+    };
+    videoIds: string[];
+  }> {
+    try {
+      const ytDlpWrap = await this.resolveYtDlpWrap();
+      const output = await ytDlpWrap.execPromise([
+        '--flat-playlist',
+        '--dump-single-json',
+        '--playlist-reverse',
+        url,
+      ]);
+
+      const info = JSON.parse(output) as YtDlpChannelInfo;
+      const videoIds =
+        info.entries
+          ?.map((entry) => entry.id)
+          .filter((id): id is string => Boolean(id)) || [];
+
+      if (videoIds.length === 0) {
+        throw new Error(`No videos found in YouTube ${type} URL.`);
+      }
+
+      return {
+        channelInfo: {
+          id:
+            info.id ||
+            info.channel_id ||
+            info.uploader_id ||
+            `youtube-${type}-${Date.now()}`,
+          title:
+            info.title ||
+            (type === 'playlist' ? 'YouTube Playlist' : 'YouTube Channel'),
+          url,
+          thumbnail: info.thumbnail || undefined,
+          author: info.uploader || info.channel || undefined,
+          description: info.description || undefined,
+        },
+        videoIds,
+      };
+    } catch (error) {
+      const originalMessage =
+        fallbackError instanceof Error
+          ? fallbackError.message
+          : fallbackError
+            ? JSON.stringify(fallbackError)
+            : 'Unknown error';
+      const fallbackMessage =
+        error instanceof Error ? error.message : String(error);
+
       throw new Error(
-        `Failed to get playlist info: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to get ${type} info: ${originalMessage}. Fallback with yt-dlp failed: ${fallbackMessage}`,
       );
     }
+  }
+
+  private async getChannelInfo(url: string): Promise<{
+    channelInfo: {
+      id: string;
+      title: string;
+      url: string;
+      thumbnail?: string;
+      author?: string;
+      description?: string;
+    };
+    videoIds: string[];
+  }> {
+    return this.getCollectionInfoByYtDlp(url, 'channel');
   }
 
   private async getVideoInfo(videoId: string): Promise<VideoInfo> {
@@ -223,16 +346,26 @@ export class YoutubeService {
     }
   }
 
-  private async getAudioStream(videoUrl: string): Promise<Readable> {
+  private async downloadAudioBuffer(videoUrl: string): Promise<Buffer> {
     const ytDlpWrap = await this.resolveYtDlpWrap();
-    return ytDlpWrap.execStream([
-      '-f',
-      'bestaudio',
-      '-o',
-      '-',
-      '--no-playlist',
-      videoUrl,
-    ]);
+    const tempDir = await mkdtemp(join(tmpdir(), 'yt-audio-'));
+    const tempFilePath = join(tempDir, 'audio.bin');
+
+    try {
+      await ytDlpWrap.execPromise([
+        '-f',
+        'bestaudio',
+        '--no-playlist',
+        '--no-part',
+        '-o',
+        tempFilePath,
+        videoUrl,
+      ]);
+
+      return await readFile(tempFilePath);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   }
 
   async uploadAudio(
@@ -242,18 +375,27 @@ export class YoutubeService {
     const audioName = `${process.env.DOWNLOAD_FOLDER}/${videoId}.mp3`;
 
     try {
-      const audioStream = await this.getAudioStream(videoUrl);
-      const chunks: Uint8Array[] = [];
+      let buffer: Buffer | null = null;
+      let lastError: unknown;
 
-      for await (const chunk of audioStream) {
-        if (typeof chunk === 'string') {
-          chunks.push(Buffer.from(chunk));
-          continue;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          buffer = await this.downloadAudioBuffer(videoUrl);
+          break;
+        } catch (error) {
+          lastError = error;
+
+          if (attempt === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
         }
-
-        chunks.push(chunk as Uint8Array);
       }
-      const buffer = Buffer.concat(chunks);
+
+      if (!buffer) {
+        throw new Error(
+          `Failed to download audio after retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+        );
+      }
 
       await this.s3Client.send(
         new PutObjectCommand({
@@ -331,8 +473,14 @@ export class YoutubeService {
     throw new Error('Invalid YouTube URL');
   }
 
-  async makeUrl(url: string) {
+  async makeUrl(url: string, onProgress?: ProgressCallback) {
     const urlType = this.getUrlType(url);
+
+    if (urlType === 'unknown') {
+      throw new Error(
+        'Unsupported YouTube URL. Use video, playlist, or channel URL.',
+      );
+    }
 
     let videoIds: string[] = [];
     let channelInfo: {
@@ -347,32 +495,75 @@ export class YoutubeService {
     if (urlType === 'video') {
       const videoId = this.extractVideoId(url);
       videoIds = [videoId];
+    } else if (urlType === 'channel') {
+      const channelData = await this.getChannelInfo(url);
+      videoIds = channelData.videoIds;
+      channelInfo = channelData.channelInfo;
     } else {
       const playlistData = await this.getPlaylistInfo(url);
       videoIds = playlistData.videoIds;
       channelInfo = playlistData.channelInfo;
     }
 
+    console.log(`[YouTube] 총 ${videoIds.length}개 영상 처리 시작`);
+    onProgress?.({ type: 'start', total: videoIds.length });
+
     const results: VideoInfo[] = [];
     const errors: { videoId: string; error: string }[] = [];
 
     for (let i = 0; i < videoIds.length; i++) {
       const videoId = videoIds[i];
+      const current = i + 1;
+
+      console.log(
+        `[YouTube] (${current}/${videoIds.length}) 처리 중: ${videoId}`,
+      );
+      onProgress?.({
+        type: 'video_start',
+        current,
+        total: videoIds.length,
+        videoId,
+      });
 
       try {
         const result = await this.processVideo(videoId);
         results.push(result);
-      } catch (error) {
-        errors.push({
+        console.log(
+          `[YouTube] (${current}/${videoIds.length}) 완료: ${result.title}`,
+        );
+        onProgress?.({
+          type: 'video_done',
+          current,
+          total: videoIds.length,
           videoId,
-          error: error instanceof Error ? error.message : String(error),
+          title: result.title,
         });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const isPrivate =
+          message.includes('Private video') ||
+          message.includes('Sign in if you');
+        console.warn(
+          `[YouTube] (${current}/${videoIds.length}) ${isPrivate ? '비공개 영상 건너뜀' : '오류'}: ${videoId} — ${message}`,
+        );
+        onProgress?.({
+          type: 'video_skip',
+          current,
+          total: videoIds.length,
+          videoId,
+          reason: isPrivate ? '비공개 영상' : message,
+        });
+        errors.push({ videoId, error: message });
       }
 
       if (i < videoIds.length - 1) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
     }
+
+    console.log(
+      `[YouTube] 처리 완료 — 성공: ${results.length}, 실패: ${errors.length}`,
+    );
 
     return {
       type: urlType,
@@ -404,8 +595,12 @@ export class YoutubeService {
     };
   }
 
-  async processAndSave(url: string, baseUrl: string): Promise<string> {
-    const result = await this.makeUrl(url);
+  async processAndSave(
+    url: string,
+    baseUrl: string,
+    onProgress?: ProgressCallback,
+  ): Promise<string> {
+    const result = await this.makeUrl(url, onProgress);
     const metadata = this.aggregateMetadata(result.videos);
 
     if (result.type === 'video' && result.videos.length > 0) {
@@ -431,7 +626,15 @@ export class YoutubeService {
         tags: metadata.tags as unknown as Json,
       });
 
-      return `${baseUrl}/rss/${channelId}`;
+      const rssUrl = `${baseUrl}/rss/${channelId}`;
+      onProgress?.({
+        type: 'complete',
+        success: result.success,
+        failed: result.failed,
+        total: result.total,
+        rssUrl,
+      });
+      return rssUrl;
     }
 
     if (result.channelInfo) {
@@ -456,7 +659,15 @@ export class YoutubeService {
         tags: metadata.tags as unknown as Json,
       });
 
-      return `${baseUrl}/rss/${channelId}`;
+      const rssUrl = `${baseUrl}/rss/${channelId}`;
+      onProgress?.({
+        type: 'complete',
+        success: result.success,
+        failed: result.failed,
+        total: result.total,
+        rssUrl,
+      });
+      return rssUrl;
     }
 
     throw new Error('Failed to process YouTube URL');
