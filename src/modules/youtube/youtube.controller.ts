@@ -29,17 +29,23 @@ export class YoutubeController {
     }
 
     return new Observable((subscriber) => {
+      const controller = new AbortController();
+
       this.youtubeService
-        .processAndSave(url, this.BASE_URL, (event) => {
-          subscriber.next({ data: event } as MessageEvent);
-        })
+        .processAndSave(
+          url,
+          this.BASE_URL,
+          (event) => {
+            subscriber.next({ data: event } as MessageEvent);
+          },
+          controller.signal,
+        )
         .then((rssUrl) => {
-          // complete 이벤트는 processAndSave 내부에서 이미 emit됨
-          // rssUrl은 complete 이벤트에 포함되어 있으므로 여기선 스트림만 닫음
           void rssUrl;
           subscriber.complete();
         })
         .catch((error) => {
+          if (controller.signal.aborted) return;
           const message =
             error instanceof Error ? error.message : 'Unknown error';
           subscriber.next({
@@ -47,6 +53,11 @@ export class YoutubeController {
           } as MessageEvent);
           subscriber.complete();
         });
+
+      return () => {
+        controller.abort();
+        console.log('[YouTube] SSE 연결 종료 — 처리 중단');
+      };
     });
   }
 

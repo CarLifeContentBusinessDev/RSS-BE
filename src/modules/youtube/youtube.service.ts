@@ -473,7 +473,11 @@ export class YoutubeService {
     throw new Error('Invalid YouTube URL');
   }
 
-  async makeUrl(url: string, onProgress?: ProgressCallback) {
+  async makeUrl(
+    url: string,
+    onProgress?: ProgressCallback,
+    signal?: AbortSignal,
+  ) {
     const urlType = this.getUrlType(url);
 
     if (urlType === 'unknown') {
@@ -512,6 +516,11 @@ export class YoutubeService {
     const errors: { videoId: string; error: string }[] = [];
 
     for (let i = 0; i < videoIds.length; i++) {
+      if (signal?.aborted) {
+        console.log('[YouTube] 처리 중단됨 (클라이언트 연결 종료)');
+        break;
+      }
+
       const videoId = videoIds[i];
       const current = i + 1;
 
@@ -557,7 +566,17 @@ export class YoutubeService {
       }
 
       if (i < videoIds.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 2000);
+          signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            { once: true },
+          );
+        });
       }
     }
 
@@ -599,8 +618,9 @@ export class YoutubeService {
     url: string,
     baseUrl: string,
     onProgress?: ProgressCallback,
+    signal?: AbortSignal,
   ): Promise<string> {
-    const result = await this.makeUrl(url, onProgress);
+    const result = await this.makeUrl(url, onProgress, signal);
     const metadata = this.aggregateMetadata(result.videos);
 
     if (result.type === 'video' && result.videos.length > 0) {
