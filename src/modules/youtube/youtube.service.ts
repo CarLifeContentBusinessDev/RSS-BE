@@ -7,7 +7,15 @@ import { ChannelDbService } from 'src/shared/services/channel-db.service';
 import type { Json } from 'src/types/database.types';
 import { Video } from 'src/types/channel.types';
 import YTDlpWrap from 'yt-dlp-wrap';
-import { access, chmod, mkdir, mkdtemp, readFile, rm } from 'fs/promises';
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from 'fs/promises';
 import { constants } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -91,6 +99,7 @@ export class YoutubeService {
   private readonly ytDlpCommand: string;
   private ytDlpWrap: YTDlpWrap | null = null;
   private ytDlpInitPromise: Promise<void> | null = null;
+  private cookiesFilePath: string | null = null;
 
   constructor(private readonly channelDbService: ChannelDbService) {
     if (
@@ -140,6 +149,21 @@ export class YoutubeService {
 
     if (!this.ytDlpInitPromise) {
       this.ytDlpInitPromise = (async () => {
+        const cookiesContent = process.env.YOUTUBE_COOKIES;
+        if (cookiesContent) {
+          const cacheDir =
+            process.env.YT_DLP_CACHE_DIR ||
+            join(process.cwd(), '.cache', 'yt-dlp');
+          await mkdir(cacheDir, { recursive: true });
+          const cookiesPath = join(cacheDir, 'cookies.txt');
+          await writeFile(cookiesPath, cookiesContent, 'utf-8');
+          this.cookiesFilePath = cookiesPath;
+          console.log('[YouTube] 쿠키 파일 적용됨');
+        } else if (process.env.YOUTUBE_COOKIES_FILE) {
+          this.cookiesFilePath = process.env.YOUTUBE_COOKIES_FILE;
+          console.log('[YouTube] 쿠키 파일 경로 적용됨');
+        }
+
         if (await this.tryUseYtDlpBinary(this.ytDlpCommand)) {
           return;
         }
@@ -256,6 +280,7 @@ export class YoutubeService {
         '--flat-playlist',
         '--dump-single-json',
         '--playlist-reverse',
+        ...this.getCookieArgs(),
         url,
       ]);
 
@@ -302,6 +327,10 @@ export class YoutubeService {
     }
   }
 
+  private getCookieArgs(): string[] {
+    return this.cookiesFilePath ? ['--cookies', this.cookiesFilePath] : [];
+  }
+
   private async getChannelInfo(url: string): Promise<{
     channelInfo: {
       id: string;
@@ -322,6 +351,7 @@ export class YoutubeService {
       const output = await ytDlpWrap.execPromise([
         '--dump-json',
         '--no-playlist',
+        ...this.getCookieArgs(),
         `https://www.youtube.com/watch?v=${videoId}`,
       ]);
 
@@ -357,6 +387,7 @@ export class YoutubeService {
         'bestaudio',
         '--no-playlist',
         '--no-part',
+        ...this.getCookieArgs(),
         '-o',
         tempFilePath,
         videoUrl,
