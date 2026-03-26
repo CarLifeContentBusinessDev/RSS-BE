@@ -744,6 +744,8 @@ export class YoutubeService {
   async updateChannel(
     channelId: string,
     url: string,
+    onProgress?: ProgressCallback,
+    signal?: AbortSignal,
   ): Promise<{ newEpisodes: number; totalEpisodes: number }> {
     const fullChannelId = `youtube-${channelId}`;
     const existingChannel =
@@ -756,12 +758,19 @@ export class YoutubeService {
     const existingVideoIds = new Set(
       existingChannel.videos.map((v: Video) => v.id),
     );
-    const result = await this.makeUrl(url);
+    const result = await this.makeUrl(url, onProgress, signal);
     const newVideos = result.videos.filter(
       (video) => !existingVideoIds.has(video.videoId),
     );
 
     if (newVideos.length === 0) {
+      onProgress?.({
+        type: 'complete',
+        success: 0,
+        failed: 0,
+        total: existingChannel.videos.length,
+        rssUrl: '',
+      });
       return {
         newEpisodes: 0,
         totalEpisodes: existingChannel.videos.length,
@@ -775,6 +784,14 @@ export class YoutubeService {
       fullChannelId,
       updatedVideos,
     );
+
+    onProgress?.({
+      type: 'complete',
+      success: newVideos.length,
+      failed: 0,
+      total: result.total,
+      rssUrl: '',
+    });
 
     return {
       newEpisodes: newVideos.length,

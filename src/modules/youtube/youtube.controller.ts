@@ -88,6 +88,49 @@ export class YoutubeController {
     }
   }
 
+  @Sse('update-stream/:channelId')
+  updateChannelStream(
+    @Param('channelId') channelId: string,
+    @Query('url') url: string,
+  ): Observable<MessageEvent> {
+    if (!url) {
+      throw new HttpException('url is required', HttpStatus.BAD_REQUEST);
+    }
+
+    const fullChannelId = `youtube-${channelId}`;
+
+    return new Observable((subscriber) => {
+      const controller = new AbortController();
+
+      this.youtubeService
+        .updateChannel(
+          channelId,
+          url,
+          (event) => {
+            subscriber.next({ data: event } as MessageEvent);
+          },
+          controller.signal,
+        )
+        .then(() => {
+          subscriber.complete();
+        })
+        .catch((error) => {
+          if (controller.signal.aborted) return;
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
+          subscriber.next({
+            data: { type: 'error', message },
+          } as MessageEvent);
+          subscriber.complete();
+        });
+
+      return () => {
+        controller.abort();
+        console.log(`[YouTube] 업데이트 SSE 연결 종료: ${fullChannelId}`);
+      };
+    });
+  }
+
   @Post('update/:channelId')
   async updateChannel(
     @Param('channelId') channelId: string,

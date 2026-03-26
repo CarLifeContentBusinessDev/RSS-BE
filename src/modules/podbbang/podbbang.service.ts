@@ -5,6 +5,13 @@ import {
   PodbbangEpisodesResponse,
 } from 'src/types/podbbang.types';
 
+export type PodbbangProgressEvent =
+  | { type: 'start'; total: number }
+  | { type: 'fetch_page'; current: number; total: number }
+  | { type: 'complete'; total: number };
+
+export type PodbbangProgressCallback = (event: PodbbangProgressEvent) => void;
+
 @Injectable()
 export class PodbbangService {
   private httpsGet<T>(url: string): Promise<T> {
@@ -37,7 +44,10 @@ export class PodbbangService {
     });
   }
 
-  async fetchPodbbangChannel(channelId: string) {
+  async fetchPodbbangChannel(
+    channelId: string,
+    onProgress?: PodbbangProgressCallback,
+  ) {
     try {
       const firstPageUrl = `https://app-api6.podbbang.com/channels/${channelId}/episodes?offset=0&limit=20&sort=desc&episode_id=0&focus_center=0&with=image`;
       const firstPageData =
@@ -45,6 +55,9 @@ export class PodbbangService {
 
       const totalCount = firstPageData.summary?.totalCount || 0;
       let allEpisodes = [...firstPageData.data];
+
+      console.log(`[Podbbang] 총 ${totalCount}개 에피소드`);
+      onProgress?.({ type: 'start', total: totalCount });
 
       if (totalCount > 20) {
         const numPages = Math.ceil(totalCount / 20);
@@ -57,6 +70,9 @@ export class PodbbangService {
           if (pageData.data && pageData.data.length > 0) {
             allEpisodes = allEpisodes.concat(pageData.data);
           }
+
+          console.log(`[Podbbang] 페이지 ${pageNum + 1}/${numPages}`);
+          onProgress?.({ type: 'fetch_page', current: pageNum + 1, total: numPages });
         }
       }
 
@@ -103,6 +119,9 @@ export class PodbbangService {
           duration: episode.duration || null,
         })) || [];
 
+      console.log(`[Podbbang] 완료: ${episodes.length}개 에피소드`);
+      onProgress?.({ type: 'complete', total: episodes.length });
+
       return {
         channelInfo,
         episodes,
@@ -126,8 +145,11 @@ export class PodbbangService {
     }
   }
 
-  async updatePodbbangChannel(channelId: string) {
-    const { episodes } = await this.fetchPodbbangChannel(channelId);
+  async updatePodbbangChannel(
+    channelId: string,
+    onProgress?: PodbbangProgressCallback,
+  ) {
+    const { episodes } = await this.fetchPodbbangChannel(channelId, onProgress);
     return episodes;
   }
 }

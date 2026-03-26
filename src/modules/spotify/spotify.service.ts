@@ -6,6 +6,13 @@ import {
   SpotifyToken,
 } from 'src/types/spotify.types';
 
+export type SpotifyProgressEvent =
+  | { type: 'start'; total: number }
+  | { type: 'fetch_page'; fetched: number; total: number }
+  | { type: 'complete'; total: number };
+
+export type SpotifyProgressCallback = (event: SpotifyProgressEvent) => void;
+
 @Injectable()
 export class SpotifyService {
   private readonly SPOTIFY_CLIENT_ID: string;
@@ -73,7 +80,10 @@ export class SpotifyService {
     return match[1];
   }
 
-  async fetchSpotifyShow(showUrl: string) {
+  async fetchSpotifyShow(
+    showUrl: string,
+    onProgress?: SpotifyProgressCallback,
+  ) {
     try {
       const showId = this.extractShowId(showUrl);
       const token = await this.getSpotifyToken();
@@ -134,6 +144,9 @@ export class SpotifyService {
       const limit = 50;
       const totalEpisodes = showData.total_episodes || 0;
 
+      console.log(`[Spotify] 총 ${totalEpisodes}개 에피소드`);
+      onProgress?.({ type: 'start', total: totalEpisodes });
+
       while (offset < totalEpisodes) {
         let episodesData: SpotifyEpisodesPage | null = null;
         const episodeErrors: string[] = [];
@@ -176,6 +189,15 @@ export class SpotifyService {
         allEpisodes = allEpisodes.concat(episodesData.items);
         offset += limit;
 
+        console.log(
+          `[Spotify] ${allEpisodes.length}/${totalEpisodes} 에피소드 가져옴`,
+        );
+        onProgress?.({
+          type: 'fetch_page',
+          fetched: allEpisodes.length,
+          total: totalEpisodes,
+        });
+
         // API 과부하 방지를 위한 아주 짧은 대기
         if (offset < totalEpisodes) {
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -198,6 +220,9 @@ export class SpotifyService {
           : null,
       }));
 
+      console.log(`[Spotify] 완료: ${episodes.length}개 에피소드`);
+      onProgress?.({ type: 'complete', total: episodes.length });
+
       return {
         channelInfo,
         episodes,
@@ -208,8 +233,11 @@ export class SpotifyService {
     }
   }
 
-  async updateSpotifyShow(showUrl: string) {
-    const { episodes } = await this.fetchSpotifyShow(showUrl);
+  async updateSpotifyShow(
+    showUrl: string,
+    onProgress?: SpotifyProgressCallback,
+  ) {
+    const { episodes } = await this.fetchSpotifyShow(showUrl, onProgress);
     return episodes;
   }
 }
