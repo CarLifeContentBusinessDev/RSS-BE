@@ -745,7 +745,9 @@ export class YoutubeService {
     channelId: string,
     url: string,
   ): Promise<{ newEpisodes: number; totalEpisodes: number }> {
-    const existingChannel = await this.channelDbService.getChannel(channelId);
+    const fullChannelId = `youtube-${channelId}`;
+    const existingChannel =
+      await this.channelDbService.getChannel(fullChannelId);
 
     if (!existingChannel) {
       throw new Error('Channel not found');
@@ -769,7 +771,10 @@ export class YoutubeService {
     const newVideoItems = newVideos.map((v) => this.convertToVideo(v));
     const updatedVideos = [...newVideoItems, ...existingChannel.videos];
 
-    await this.channelDbService.updateChannelVideos(channelId, updatedVideos);
+    await this.channelDbService.updateChannelVideos(
+      fullChannelId,
+      updatedVideos,
+    );
 
     return {
       newEpisodes: newVideos.length,

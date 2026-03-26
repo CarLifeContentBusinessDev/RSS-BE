@@ -17,16 +17,6 @@ export class ChannelDbService {
   ): Promise<Channel> {
     const supabase = this.supabaseService.getClient();
 
-    const { data: existing } = await supabase
-      .from('channels')
-      .select('*')
-      .eq('id', channel.id)
-      .single();
-
-    if (existing) {
-      return this.formatChannel(existing);
-    }
-
     const newChannel: ChannelInsert = {
       id: channel.id,
       title: channel.title,
@@ -52,7 +42,7 @@ export class ChannelDbService {
 
     const { data, error } = await supabase
       .from('channels')
-      .insert([newChannel])
+      .upsert([newChannel], { onConflict: 'id' })
       .select()
       .single();
 
