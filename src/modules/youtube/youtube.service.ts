@@ -341,7 +341,7 @@ export class YoutubeService {
   }
 
   private getBaseArgs(): string[] {
-    const args = ['--js-runtimes', 'nodejs'];
+    const args = ['--js-runtimes', 'node'];
     if (this.cookiesFilePath) {
       args.push('--cookies', this.cookiesFilePath);
     }
