@@ -1,4 +1,8 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { Injectable } from '@nestjs/common';
 import { r2Config } from 'src/common/config/r2.config';
 import { VideoInfo } from 'src/types/youtube.types';
@@ -149,16 +153,30 @@ export class YoutubeService {
 
     if (!this.ytDlpInitPromise) {
       this.ytDlpInitPromise = (async () => {
-        const cookiesContent = process.env.YOUTUBE_COOKIES;
-        if (cookiesContent) {
-          const cacheDir =
-            process.env.YT_DLP_CACHE_DIR ||
-            join(process.cwd(), '.cache', 'yt-dlp');
-          await mkdir(cacheDir, { recursive: true });
-          const cookiesPath = join(cacheDir, 'cookies.txt');
-          await writeFile(cookiesPath, cookiesContent, 'utf-8');
-          this.cookiesFilePath = cookiesPath;
-          console.log('[YouTube] 쿠키 파일 적용됨');
+        const cacheDir =
+          process.env.YT_DLP_CACHE_DIR ||
+          join(process.cwd(), '.cache', 'yt-dlp');
+        await mkdir(cacheDir, { recursive: true });
+
+        const r2CookiesKey = process.env.YOUTUBE_COOKIES_R2_KEY;
+        if (r2CookiesKey) {
+          try {
+            const res = await this.s3Client.send(
+              new GetObjectCommand({
+                Bucket: r2Config.bucketName,
+                Key: r2CookiesKey,
+              }),
+            );
+            const body = await res.Body?.transformToString('utf-8');
+            if (body) {
+              const cookiesPath = join(cacheDir, 'cookies.txt');
+              await writeFile(cookiesPath, body, 'utf-8');
+              this.cookiesFilePath = cookiesPath;
+              console.log('[YouTube] R2에서 쿠키 파일 다운로드 완료');
+            }
+          } catch (e) {
+            console.error('[YouTube] 쿠키 파일 다운로드 실패:', e);
+          }
         } else if (process.env.YOUTUBE_COOKIES_FILE) {
           this.cookiesFilePath = process.env.YOUTUBE_COOKIES_FILE;
           console.log('[YouTube] 쿠키 파일 경로 적용됨');
@@ -168,14 +186,9 @@ export class YoutubeService {
           return;
         }
 
-        const cacheDir =
-          process.env.YT_DLP_CACHE_DIR ||
-          join(process.cwd(), '.cache', 'yt-dlp');
         const binaryName =
           process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
         const binaryPath = join(cacheDir, binaryName);
-
-        await mkdir(cacheDir, { recursive: true });
 
         if (!(await this.fileExists(binaryPath))) {
           await YTDlpWrap.downloadFromGithub(binaryPath);
