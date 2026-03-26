@@ -280,7 +280,7 @@ export class YoutubeService {
         '--flat-playlist',
         '--dump-single-json',
         '--playlist-reverse',
-        ...this.getCookieArgs(),
+        ...this.getBaseArgs(),
         url,
       ]);
 
@@ -327,8 +327,12 @@ export class YoutubeService {
     }
   }
 
-  private getCookieArgs(): string[] {
-    return this.cookiesFilePath ? ['--cookies', this.cookiesFilePath] : [];
+  private getBaseArgs(): string[] {
+    const args = ['--js-runtimes', 'nodejs'];
+    if (this.cookiesFilePath) {
+      args.push('--cookies', this.cookiesFilePath);
+    }
+    return args;
   }
 
   private async getChannelInfo(url: string): Promise<{
@@ -351,7 +355,7 @@ export class YoutubeService {
       const output = await ytDlpWrap.execPromise([
         '--dump-json',
         '--no-playlist',
-        ...this.getCookieArgs(),
+        ...this.getBaseArgs(),
         `https://www.youtube.com/watch?v=${videoId}`,
       ]);
 
@@ -387,7 +391,7 @@ export class YoutubeService {
         'bestaudio',
         '--no-playlist',
         '--no-part',
-        ...this.getCookieArgs(),
+        ...this.getBaseArgs(),
         '-o',
         tempFilePath,
         videoUrl,
