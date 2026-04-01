@@ -76,7 +76,8 @@ export type YoutubeProgressEvent =
       failed: number;
       total: number;
       rssUrl: string;
-    };
+    }
+  | { type: 'ping' };
 
 export type ProgressCallback = (event: YoutubeProgressEvent) => void;
 
@@ -582,6 +583,10 @@ export class YoutubeService {
         videoId,
       });
 
+      const keepaliveTimer = onProgress
+        ? setInterval(() => onProgress({ type: 'ping' }), 20000)
+        : null;
+
       try {
         const result = await this.processVideo(videoId);
         results.push(result);
@@ -611,6 +616,8 @@ export class YoutubeService {
           reason: isPrivate ? '비공개 영상' : message,
         });
         errors.push({ videoId, error: message });
+      } finally {
+        if (keepaliveTimer) clearInterval(keepaliveTimer);
       }
 
       if (i < videoIds.length - 1) {
