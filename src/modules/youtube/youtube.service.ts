@@ -4,25 +4,25 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { Injectable } from '@nestjs/common';
-import { r2Config } from 'src/common/config/r2.config';
-import { VideoInfo } from 'src/types/youtube.types';
-import ytpl from 'ytpl';
-import { ChannelDbService } from 'src/shared/services/channel-db.service';
-import type { Json } from 'src/types/database.types';
-import { Video } from 'src/types/channel.types';
-import YTDlpWrap from 'yt-dlp-wrap';
+import { constants, createReadStream } from 'fs';
 import {
   access,
   chmod,
   mkdir,
   mkdtemp,
-  readFile,
   rm,
+  stat,
   writeFile,
 } from 'fs/promises';
-import { constants } from 'fs';
-import { join } from 'path';
 import { tmpdir } from 'os';
+import { join } from 'path';
+import { r2Config } from 'src/common/config/r2.config';
+import { ChannelDbService } from 'src/shared/services/channel-db.service';
+import { Video } from 'src/types/channel.types';
+import type { Json } from 'src/types/database.types';
+import { VideoInfo } from 'src/types/youtube.types';
+import YTDlpWrap from 'yt-dlp-wrap';
+import ytpl from 'ytpl';
 
 interface YtDlpVideoInfo {
   id: string;
@@ -394,42 +394,45 @@ export class YoutubeService {
     }
   }
 
-  private async downloadAudioBuffer(videoUrl: string): Promise<Buffer> {
+  // 변경됨: Buffer 대신 파일 경로와 임시 폴더 반환
+  private async downloadAudioFile(
+    videoUrl: string,
+  ): Promise<{ tempFilePath: string; tempDir: string }> {
     const ytDlpWrap = await this.resolveYtDlpWrap();
     const tempDir = await mkdtemp(join(tmpdir(), 'yt-audio-'));
     const tempFilePath = join(tempDir, 'audio.bin');
 
-    try {
-      await ytDlpWrap.execPromise([
-        '-f',
-        'bestaudio',
-        '--no-playlist',
-        '--no-part',
-        ...this.getBaseArgs(),
-        '-o',
-        tempFilePath,
-        videoUrl,
-      ]);
+    await ytDlpWrap.execPromise([
+      '-f',
+      'bestaudio',
+      '--no-playlist',
+      '--no-part',
+      ...this.getBaseArgs(),
+      '-o',
+      tempFilePath,
+      videoUrl,
+    ]);
 
-      return await readFile(tempFilePath);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+    return { tempFilePath, tempDir };
   }
 
+  // 변경됨: 스트림을 사용하여 S3/R2에 업로드
   async uploadAudio(
     videoId: string,
     videoUrl: string,
   ): Promise<{ url: string; size: number }> {
     const audioName = `${process.env.DOWNLOAD_FOLDER}/${videoId}.mp3`;
+    let tempFilePath = '';
+    let tempDir = '';
 
     try {
-      let buffer: Buffer | null = null;
+      let downloadedInfo: { tempFilePath: string; tempDir: string } | null =
+        null;
       let lastError: unknown;
 
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          buffer = await this.downloadAudioBuffer(videoUrl);
+          downloadedInfo = await this.downloadAudioFile(videoUrl);
           break;
         } catch (error) {
           lastError = error;
@@ -440,25 +443,31 @@ export class YoutubeService {
         }
       }
 
-      if (!buffer) {
+      if (!downloadedInfo) {
         throw new Error(
           `Failed to download audio after retries: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
         );
       }
 
+      tempFilePath = downloadedInfo.tempFilePath;
+      tempDir = downloadedInfo.tempDir;
+
+      const fileStats = await stat(tempFilePath);
+      const fileStream = createReadStream(tempFilePath);
+
       await this.s3Client.send(
         new PutObjectCommand({
           Bucket: r2Config.bucketName,
           Key: audioName,
-          Body: buffer,
+          Body: fileStream,
           ContentType: 'audio/mpeg',
-          ContentLength: buffer.length,
+          ContentLength: fileStats.size,
         }),
       );
 
       return {
         url: `${r2Config.publicUrl}/${audioName}`,
-        size: buffer.length,
+        size: fileStats.size,
       };
     } catch (error) {
       console.error(
@@ -466,6 +475,13 @@ export class YoutubeService {
         error instanceof Error ? error.message : String(error),
       );
       throw error;
+    } finally {
+      // 임시 폴더 및 파일은 업로드 성공/실패 여부와 상관없이 무조건 정리
+      if (tempDir) {
+        await rm(tempDir, { recursive: true, force: true }).catch((e) =>
+          console.error('임시 파일 삭제 실패:', e),
+        );
+      }
     }
   }
 
