@@ -253,6 +253,14 @@ export class YoutubeService {
     };
     videoIds: string[];
   }> {
+    // ytpl can undercount playlist entries for restricted/private items.
+    // Prefer yt-dlp first so we get the most complete entry list.
+    try {
+      return await this.getCollectionInfoByYtDlp(url, 'playlist');
+    } catch {
+      // Fallback to ytpl below.
+    }
+
     try {
       const result = await ytpl(url, { limit: Infinity });
       const videoIds = result.items.map((item) => item.id);
@@ -269,7 +277,9 @@ export class YoutubeService {
         videoIds,
       };
     } catch (error) {
-      return this.getCollectionInfoByYtDlp(url, 'playlist', error);
+      throw new Error(
+        `Failed to get playlist info: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
