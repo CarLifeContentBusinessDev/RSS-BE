@@ -753,8 +753,9 @@ export class YoutubeService {
       }
 
       if (i < videoIds.length - 1 && !signal?.aborted) {
+        const delayMs = 5000 + Math.random() * 5000; // 5~10초 랜덤
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 2000);
+          const timer = setTimeout(resolve, delayMs);
           signal?.addEventListener(
             'abort',
             () => {
