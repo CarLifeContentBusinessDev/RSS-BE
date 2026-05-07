@@ -6,6 +6,7 @@ export interface Channel {
   type: string;
   addedAt: string;
   lastUpdate?: string;
+  episodeCount: number;
   videos: Video[];
   description?: string;
   summary?: string;

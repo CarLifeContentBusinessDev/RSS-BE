@@ -36,25 +36,7 @@ export class RssController {
       }
 
       const rssXML = this.rssService.generateRSS(
-        {
-          id: channel.id,
-          title: channel.title,
-          description:
-            channel.description ||
-            channel.summary ||
-            `RSS feed for ${channel.title}`,
-          summary: channel.summary || channel.description,
-          url: channel.url,
-          thumbnail: channel.thumbnail,
-          author: channel.author,
-          copyright: channel.copyright,
-          owner: channel.owner,
-          language: channel.language,
-          type: channel.type,
-          videos: channel.videos,
-          addedAt: channel.addedAt,
-          lastUpdate: channel.lastUpdate,
-        },
+        channel,
         channel.videos,
         this.BASE_URL,
       );

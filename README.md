@@ -22,17 +22,20 @@
 ## 프로젝트 소개
 
 ### 문제 상황
+
 - 팟빵, Spotify, YouTube 콘텐츠를 사용자가 원하는 플레이어에서 재생할 수 있도록 처리할 수 없음
 
 ### 해결 방법
+
 각 플랫폼의 콘텐츠를 **표준 RSS 피드**로 변환하여, 사용자가 원하는 플레이어에서 자유롭게 재생할 수 있게 합니다.
 
 ### 지원 플랫폼
-| 플랫폼 | 상태 | 설명 |
-|--------|------|------|
-| **팟빵** | 완벽 지원 | 공식 API 사용, 오디오 완벽 제공 |
-| **Spotify** | 대부분 지원 | 공식 API 사용, 단독 계약 채널 제외 오디오 제공 |
-| **YouTube** | 실험적 | 오디오 추출 가능하나 약관/성능/유지보수비용 이슈 있음 |
+
+| 플랫폼      | 상태        | 설명                                                  |
+| ----------- | ----------- | ----------------------------------------------------- |
+| **팟빵**    | 완벽 지원   | 공식 API 사용, 오디오 완벽 제공                       |
+| **Spotify** | 대부분 지원 | 공식 API 사용, 단독 계약 채널 제외 오디오 제공        |
+| **YouTube** | 실험적      | 오디오 추출 가능하나 약관/성능/유지보수비용 이슈 있음 |
 
 ---
 
@@ -54,7 +57,7 @@
 - **Node.js** 18.x 이상
 - **npm**
 - **Supabase** 계정
-- **Cloudflare R2** 계정 
+- **Cloudflare R2** 계정
 - **Spotify API** 키
 
 ### 2. 설치
@@ -104,7 +107,7 @@ FRONTEND_URL=your-published-domain
 
 Supabase에서 아래 SQL을 실행하여 테이블 생성:
 
-```sql
+````sql
 CREATE TABLE channels (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -112,6 +115,7 @@ CREATE TABLE channels (
   thumbnail TEXT,
   type TEXT NOT NULL,
   videos JSONB,
+  episode_count INTEGER DEFAULT 0,
   description TEXT,
   summary TEXT,
   author TEXT,
@@ -127,7 +131,6 @@ CREATE TABLE channels (
   added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   last_update TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-```
 
 ### 5. 서버 실행
 
@@ -139,7 +142,7 @@ npm run start:dev
 npm run build
 npm run start:prod
 # 배포환경에 따라 다를 수 있음
-```
+````
 
 서버가 `http://localhost:3000`에서 실행됩니다.
 
@@ -189,6 +192,7 @@ curl http://localhost:3000/api/health
 #### 1. 팟빵 채널 ID 찾기
 
 팟빵 웹사이트에서 원하는 채널 URL을 확인:
+
 ```
 예: https://www.podbbang.com/channels/1789807
                                          ↑
@@ -204,6 +208,7 @@ curl -X POST http://localhost:3000/api/podbbang/channel \
 ```
 
 **응답:**
+
 ```json
 {
   "rssUrl": "http://localhost:3000/rss/podbbang_1789807"
@@ -239,6 +244,7 @@ curl -X POST http://localhost:3000/api/spotify/find-rss \
 ```
 
 **성공 시:**
+
 ```json
 {
   "feedUrl": "https://feeds.acast.com/...",
@@ -247,6 +253,7 @@ curl -X POST http://localhost:3000/api/spotify/find-rss \
 ```
 
 **실패 시:**
+
 ```json
 {
   "error": "Podcast not found on Apple Podcasts"
@@ -258,12 +265,14 @@ curl -X POST http://localhost:3000/api/spotify/find-rss \
 ### YouTube
 
 YouTube 기능은 다음 이유로 프로덕션 사용을 권장하지 않습니다:
+
 - YouTube 서비스 약관 위반 가능성
 - 저작권 문제
 - 높은 처리 시간 (플레이리스트 100개 = 1-3시간)
 - 높은 저장 공간 비용
 
 실행 관련 참고:
+
 - 현재 서버는 `YT_DLP_PATH`가 없으면 `yt-dlp-wrap`을 통해 바이너리를 자동 준비합니다.
 - 배포 환경에서 GitHub 접근이 제한되면 자동 다운로드가 실패할 수 있으므로 `YT_DLP_PATH`로 고정 경로를 지정하는 것을 권장합니다.
 
@@ -276,6 +285,7 @@ curl -X POST http://localhost:3000/youtube/process \
 ```
 
 **주의**:
+
 - 비디오당 30초~2분 소요
 - 100개 비디오 = 약 1-3시간
 - R2 저장 공간 필요

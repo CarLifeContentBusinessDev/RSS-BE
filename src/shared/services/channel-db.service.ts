@@ -12,6 +12,9 @@ import { Channel, Video } from '../../types/channel.types';
 export class ChannelDbService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
+  private readonly channelListColumns =
+    'id,title,url,thumbnail,type,episode_count,description,summary,author,copyright,owner,language,added_at,last_update,category,content_type,publisher,host,tags,external_rss_url';
+
   async addChannel(
     channel: Omit<ChannelInsert, 'added_at' | 'last_update'>,
   ): Promise<Channel> {
@@ -24,6 +27,7 @@ export class ChannelDbService {
       thumbnail: channel.thumbnail || null,
       type: channel.type || 'youtube',
       videos: (channel.videos || []) as unknown as Json,
+      episode_count: Array.isArray(channel.videos) ? channel.videos.length : 0,
       description: channel.description || null,
       summary: channel.summary || null,
       author: channel.author || null,
@@ -54,12 +58,13 @@ export class ChannelDbService {
     return this.formatChannel(data);
   }
 
-  async getAllChannels(): Promise<Channel[]> {
+  async getAllChannels(includeVideos = false): Promise<Channel[]> {
     const supabase = this.supabaseService.getClient();
+    const selectColumns = includeVideos ? '*' : this.channelListColumns;
 
     const { data, error } = await supabase
       .from('channels')
-      .select('*')
+      .select(selectColumns as any)
       .order('added_at', { ascending: false });
 
     if (error) {
@@ -67,7 +72,9 @@ export class ChannelDbService {
       throw new Error(error.message);
     }
 
-    return data.map((channel) => this.formatChannel(channel));
+    return (data ?? []).map((channel) =>
+      this.formatChannel(channel as unknown as ChannelRow),
+    );
   }
 
   async getChannel(channelId: string): Promise<Channel | null> {
@@ -98,6 +105,7 @@ export class ChannelDbService {
 
     const updateData: ChannelUpdate = {
       videos: videos as unknown as Json,
+      episode_count: videos.length,
       last_update: new Date().toISOString(),
     };
 
@@ -132,6 +140,20 @@ export class ChannelDbService {
     return true;
   }
 
+  private getEpisodeCountFromVideos(videos: Json): number {
+    return Array.isArray(videos) ? videos.length : 0;
+  }
+
+  private resolveEpisodeCount(data: ChannelRow): number {
+    const episodeCount = (data as { episode_count?: unknown }).episode_count;
+
+    if (typeof episodeCount === 'number') {
+      return episodeCount;
+    }
+
+    return this.getEpisodeCountFromVideos(data.videos);
+  }
+
   private formatChannel(data: ChannelRow): Channel {
     return {
       id: data.id,
@@ -141,6 +163,7 @@ export class ChannelDbService {
       type: data.type,
       addedAt: data.added_at,
       lastUpdate: data.last_update || undefined,
+      episodeCount: this.resolveEpisodeCount(data),
       videos: (data.videos as unknown as Video[]) || [],
       description: data.description || undefined,
       summary: data.summary || undefined,

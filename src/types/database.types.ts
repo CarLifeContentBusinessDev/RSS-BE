@@ -17,6 +17,7 @@ export interface Database {
           thumbnail: string | null;
           type: string;
           videos: Json;
+          episode_count: number | null;
           description: string | null;
           summary: string | null;
           author: string | null;
@@ -39,6 +40,7 @@ export interface Database {
           thumbnail?: string | null;
           type?: string;
           videos?: Json;
+          episode_count?: number | null;
           description?: string | null;
           summary?: string | null;
           author?: string | null;
@@ -61,6 +63,7 @@ export interface Database {
           thumbnail?: string | null;
           type?: string;
           videos?: Json;
+          episode_count?: number | null;
           description?: string | null;
           summary?: string | null;
           author?: string | null;
