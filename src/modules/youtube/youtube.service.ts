@@ -354,10 +354,15 @@ export class YoutubeService {
 
   private getBaseArgs(): string[] {
     if (this.cookiesFilePath) {
-      // iOS/Android clients don't support cookies — use web client with cookies + Node.js for n-challenge
-      return ['--cookies', this.cookiesFilePath, '--js-runtimes', 'node'];
+      return [
+        '--cookies',
+        this.cookiesFilePath,
+        '--extractor-args',
+        'youtube:player_client=web,tv,web_safari',
+        '--user-agent',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+      ];
     }
-    // No cookies: use mobile clients to reduce bot detection
     return [
       '--extractor-args',
       'youtube:player_client=ios,android,web',
@@ -753,9 +758,8 @@ export class YoutubeService {
       }
 
       if (i < videoIds.length - 1 && !signal?.aborted) {
-        const delayMs = 5000 + Math.random() * 5000; // 5~10초 랜덤
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, delayMs);
+          const timer = setTimeout(resolve, 2000);
           signal?.addEventListener(
             'abort',
             () => {
@@ -971,5 +975,46 @@ export class YoutubeService {
       newEpisodes: newVideos.length,
       totalEpisodes: updatedVideos.length,
     };
+  }
+
+  // ⚠️ 임시 디버그용 — 진단 끝나면 삭제
+  async debugTestCookies(): Promise<{
+    ok: boolean;
+    cookiesFilePath: string | null;
+    ytDlpVersion?: string;
+    testResult?: string;
+    error?: string;
+    baseArgs?: string[];
+  }> {
+    try {
+      const ytDlpWrap = await this.resolveYtDlpWrap();
+      const version = await ytDlpWrap.getVersion();
+      const baseArgs = this.getBaseArgs();
+
+      const args = [
+        '--simulate',
+        '--print',
+        'title',
+        ...baseArgs,
+        'https://www.youtube.com/watch?v=jokNw9t1iaA',
+      ];
+
+      const output = await this.execWithTimeout(ytDlpWrap, args);
+
+      return {
+        ok: true,
+        cookiesFilePath: this.cookiesFilePath,
+        ytDlpVersion: version,
+        testResult: output.trim(),
+        baseArgs,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        cookiesFilePath: this.cookiesFilePath,
+        error: error instanceof Error ? error.message : String(error),
+        baseArgs: this.getBaseArgs(),
+      };
+    }
   }
 }

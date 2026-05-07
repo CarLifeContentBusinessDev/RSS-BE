@@ -9,6 +9,7 @@ import {
   HttpStatus,
   Sse,
   MessageEvent,
+  Get,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { YoutubeService } from './youtube.service';
@@ -43,15 +44,20 @@ export class YoutubeController {
       );
 
       this.youtubeService
-        .processAndSave(url, this.BASE_URL, (event) => {
-          if (!isSubscriberActive) return;
-          try {
-            subscriber.next({ data: event } as MessageEvent);
-          } catch (error) {
-            console.error('[YouTube] 콜백 전송 에러:', error);
-            isSubscriberActive = false;
-          }
-        }, abortController.signal)
+        .processAndSave(
+          url,
+          this.BASE_URL,
+          (event) => {
+            if (!isSubscriberActive) return;
+            try {
+              subscriber.next({ data: event } as MessageEvent);
+            } catch (error) {
+              console.error('[YouTube] 콜백 전송 에러:', error);
+              isSubscriberActive = false;
+            }
+          },
+          abortController.signal,
+        )
         .then((rssUrl) => {
           void rssUrl;
           clearTimeout(timeoutHandle);
@@ -133,15 +139,20 @@ export class YoutubeController {
       );
 
       this.youtubeService
-        .updateChannel(channelId, url, (event) => {
-          if (!isSubscriberActive) return;
-          try {
-            subscriber.next({ data: event } as MessageEvent);
-          } catch (error) {
-            console.error('[YouTube] 업데이트 콜백 전송 에러:', error);
-            isSubscriberActive = false;
-          }
-        }, abortController.signal)
+        .updateChannel(
+          channelId,
+          url,
+          (event) => {
+            if (!isSubscriberActive) return;
+            try {
+              subscriber.next({ data: event } as MessageEvent);
+            } catch (error) {
+              console.error('[YouTube] 업데이트 콜백 전송 에러:', error);
+              isSubscriberActive = false;
+            }
+          },
+          abortController.signal,
+        )
         .then(() => {
           clearTimeout(timeoutHandle);
           if (!isSubscriberActive) return;
@@ -150,7 +161,9 @@ export class YoutubeController {
         .catch((error) => {
           clearTimeout(timeoutHandle);
           if (!isSubscriberActive) {
-            console.log('[YouTube] 업데이트 처리 중단 — 구독이 없으므로 에러 전송 생략');
+            console.log(
+              '[YouTube] 업데이트 처리 중단 — 구독이 없으므로 에러 전송 생략',
+            );
             return;
           }
           const message =
@@ -164,7 +177,9 @@ export class YoutubeController {
         isSubscriberActive = false;
         clearTimeout(timeoutHandle);
         abortController.abort();
-        console.log(`[YouTube] 업데이트 SSE 연결 종료: ${fullChannelId} — 처리 중단`);
+        console.log(
+          `[YouTube] 업데이트 SSE 연결 종료: ${fullChannelId} — 처리 중단`,
+        );
       };
     });
   }
@@ -189,5 +204,11 @@ export class YoutubeController {
       const message = error instanceof Error ? error.message : 'Unknown error';
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+
+  // ⚠️ 임시 디버그용 — 진단 끝나면 삭제
+  @Get('debug/cookie-test')
+  async debugCookieTest() {
+    return this.youtubeService.debugTestCookies();
   }
 }
