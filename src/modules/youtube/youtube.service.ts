@@ -2,6 +2,7 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { Injectable } from '@nestjs/common';
 import { constants, createReadStream } from 'fs';
@@ -436,6 +437,39 @@ export class YoutubeService {
     let tempDir = '';
 
     try {
+      // 우선 R2에 해당 오디오가 이미 존재하는지 확인합니다. 존재하면 재다운로드/업로드를 건너뜁니다.
+      try {
+        const head = await this.s3Client.send(
+          new HeadObjectCommand({
+            Bucket: r2Config.bucketName,
+            Key: audioName,
+          }),
+        );
+        const existingSize = head.ContentLength ?? 0;
+        console.log(
+          `[YouTube] 오디오가 이미 존재하여 업로드 건너뜀: ${audioName}`,
+        );
+        return {
+          url: `${r2Config.publicUrl}/${audioName}`,
+          size: existingSize,
+        };
+      } catch (headErr: unknown) {
+        // NotFound(404)가 아닌 다른 에러일 경우 경고만 남기고 계속 진행
+        const err = headErr as Record<string, unknown> | null | undefined;
+        const isNotFound =
+          err &&
+          (err['name'] === 'NotFound' ||
+            (err['$metadata'] as Record<string, unknown> | undefined)?.[
+              'httpStatusCode'
+            ] === 404);
+        if (!isNotFound) {
+          console.warn(
+            '[YouTube] R2 헤더 조회 중 에러 발생, 다운로드 시도 계속:',
+            headErr,
+          );
+        }
+        // 없으면 계속 진행하여 다운로드/업로드 수행
+      }
       let downloadedInfo: { tempFilePath: string; tempDir: string } | null =
         null;
       let lastError: unknown;
@@ -472,6 +506,9 @@ export class YoutubeService {
           Body: fileStream,
           ContentType: 'audio/mpeg',
           ContentLength: fileStats.size,
+          Metadata: {
+            'src-size': String(fileStats.size),
+          },
         }),
       );
 

@@ -29,36 +29,34 @@ export class YoutubeController {
     }
 
     return new Observable((subscriber) => {
-      const controller = new AbortController();
       let isSubscriberActive = true;
+      let isTimedOut = false;
 
       // 30분 타임아웃 (매우 긴 재생목록용)
       const timeoutHandle = setTimeout(
         () => {
-          if (!controller.signal.aborted) {
-            console.log('[YouTube] SSE 요청 타임아웃 — 연결 종료');
-            controller.abort();
+          if (!isTimedOut) {
+            isTimedOut = true;
+            console.log(
+              '[YouTube] SSE 요청 타임아웃 — 구독만 종료 (처리 계속)',
+            );
+            isSubscriberActive = false;
           }
         },
         30 * 60 * 1000,
       );
 
+      // 주의: 클라이언트가 끊겨도 서버 쪽 처리를 계속 진행하도록 signal을 전달하지 않습니다.
       this.youtubeService
-        .processAndSave(
-          url,
-          this.BASE_URL,
-          (event) => {
-            if (!isSubscriberActive) return;
-            try {
-              subscriber.next({ data: event } as MessageEvent);
-            } catch (error) {
-              console.error('[YouTube] 콜백 전송 에러:', error);
-              isSubscriberActive = false;
-              controller.abort();
-            }
-          },
-          controller.signal,
-        )
+        .processAndSave(url, this.BASE_URL, (event) => {
+          if (!isSubscriberActive) return;
+          try {
+            subscriber.next({ data: event } as MessageEvent);
+          } catch (error) {
+            console.error('[YouTube] 콜백 전송 에러:', error);
+            isSubscriberActive = false;
+          }
+        })
         .then((rssUrl) => {
           void rssUrl; // SSE에서는 이미 complete 이벤트로 전달됨
           clearTimeout(timeoutHandle);
@@ -67,25 +65,21 @@ export class YoutubeController {
         })
         .catch((error) => {
           clearTimeout(timeoutHandle);
-          if (controller.signal.aborted) {
-            console.log('[YouTube] 처리 중단 — 에러 보내지 않음');
+          if (!isSubscriberActive || isTimedOut) {
+            console.log('[YouTube] 처리 중단 — 구독이 없으므로 에러 전송 안함');
             return;
           }
-          if (!isSubscriberActive) return;
           const message =
             error instanceof Error ? error.message : 'Unknown error';
           console.error('[YouTube] 처리 에러:', message);
-          subscriber.next({
-            data: { type: 'error', message },
-          } as MessageEvent);
+          subscriber.next({ data: { type: 'error', message } } as MessageEvent);
           subscriber.complete();
         });
 
       return () => {
         isSubscriberActive = false;
         clearTimeout(timeoutHandle);
-        controller.abort();
-        console.log('[YouTube] SSE 연결 종료 — 처리 중단');
+        console.log('[YouTube] SSE 연결 종료 — 구독만 종료 (처리 계속)');
       };
     });
   }
@@ -129,36 +123,33 @@ export class YoutubeController {
     const fullChannelId = `youtube-${channelId}`;
 
     return new Observable((subscriber) => {
-      const controller = new AbortController();
       let isSubscriberActive = true;
+      let isTimedOut = false;
 
       // 30분 타임아웃 (매우 긴 재생목록용)
       const timeoutHandle = setTimeout(
         () => {
-          if (!controller.signal.aborted) {
-            console.log('[YouTube] 업데이트 SSE 요청 타임아웃 — 연결 종료');
-            controller.abort();
+          if (!isTimedOut) {
+            isTimedOut = true;
+            console.log(
+              '[YouTube] 업데이트 SSE 요청 타임아웃 — 구독만 종료 (처리 계속)',
+            );
+            isSubscriberActive = false;
           }
         },
         30 * 60 * 1000,
       );
 
       this.youtubeService
-        .updateChannel(
-          channelId,
-          url,
-          (event) => {
-            if (!isSubscriberActive) return;
-            try {
-              subscriber.next({ data: event } as MessageEvent);
-            } catch (error) {
-              console.error('[YouTube] 업데이트 콜백 전송 에러:', error);
-              isSubscriberActive = false;
-              controller.abort();
-            }
-          },
-          controller.signal,
-        )
+        .updateChannel(channelId, url, (event) => {
+          if (!isSubscriberActive) return;
+          try {
+            subscriber.next({ data: event } as MessageEvent);
+          } catch (error) {
+            console.error('[YouTube] 업데이트 콜백 전송 에러:', error);
+            isSubscriberActive = false;
+          }
+        })
         .then(() => {
           clearTimeout(timeoutHandle);
           if (!isSubscriberActive) return;
@@ -166,25 +157,25 @@ export class YoutubeController {
         })
         .catch((error) => {
           clearTimeout(timeoutHandle);
-          if (controller.signal.aborted) {
-            console.log('[YouTube] 업데이트 처리 중단 — 에러 보내지 않음');
+          if (!isSubscriberActive || isTimedOut) {
+            console.log(
+              '[YouTube] 업데이트 처리 중단 — 구독이 없으므로 에러送信 생략',
+            );
             return;
           }
-          if (!isSubscriberActive) return;
           const message =
             error instanceof Error ? error.message : 'Unknown error';
           console.error('[YouTube] 업데이트 처리 에러:', message);
-          subscriber.next({
-            data: { type: 'error', message },
-          } as MessageEvent);
+          subscriber.next({ data: { type: 'error', message } } as MessageEvent);
           subscriber.complete();
         });
 
       return () => {
         isSubscriberActive = false;
         clearTimeout(timeoutHandle);
-        controller.abort();
-        console.log(`[YouTube] 업데이트 SSE 연결 종료: ${fullChannelId}`);
+        console.log(
+          `[YouTube] 업데이트 SSE 연결 종료: ${fullChannelId} — 구독만 종료 (처리 계속)`,
+        );
       };
     });
   }
