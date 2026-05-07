@@ -209,7 +209,10 @@ export class ChannelController {
         .getChannel(fullChannelId)
         .then((channel) => {
           if (!channel) throw new Error('채널이 존재하지 않습니다.');
-          return this.podbbangService.updatePodbbangChannel(channelId, onProgress);
+          return this.podbbangService.updatePodbbangChannel(
+            channelId,
+            onProgress,
+          );
         })
         .then((episodes) =>
           this.channelDbService.updateChannelVideos(fullChannelId, episodes),
@@ -351,7 +354,10 @@ export class ChannelController {
         .fetchSpotifyShow(spotifyUrl, onProgress)
         .then(({ channelInfo }) => {
           subscriber.next({
-            data: { type: 'searching', message: 'Apple Podcasts에서 RSS 검색 중...' },
+            data: {
+              type: 'searching',
+              message: 'Apple Podcasts에서 RSS 검색 중...',
+            },
           } as MessageEvent);
           return this.applePodcastsService
             .getRssFeedFromSpotify(spotifyUrl, channelInfo.title)
@@ -371,14 +377,12 @@ export class ChannelController {
                 videos: [],
                 external_rss_url: feedUrl,
               };
-              return this.channelDbService
-                .addChannel(channelData)
-                .then(() => {
-                  subscriber.next({
-                    data: { type: 'complete', feedUrl, channelId: fullChannelId },
-                  } as MessageEvent);
-                  subscriber.complete();
-                });
+              return this.channelDbService.addChannel(channelData).then(() => {
+                subscriber.next({
+                  data: { type: 'complete', feedUrl, channelId: fullChannelId },
+                } as MessageEvent);
+                subscriber.complete();
+              });
             });
         })
         .catch((error) => {

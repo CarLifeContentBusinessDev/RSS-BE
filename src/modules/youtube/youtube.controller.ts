@@ -30,24 +30,51 @@ export class YoutubeController {
 
     return new Observable((subscriber) => {
       const controller = new AbortController();
+      let isSubscriberActive = true;
+
+      // 30분 타임아웃 (매우 긴 재생목록용)
+      const timeoutHandle = setTimeout(
+        () => {
+          if (!controller.signal.aborted) {
+            console.log('[YouTube] SSE 요청 타임아웃 — 연결 종료');
+            controller.abort();
+          }
+        },
+        30 * 60 * 1000,
+      );
 
       this.youtubeService
         .processAndSave(
           url,
           this.BASE_URL,
           (event) => {
-            subscriber.next({ data: event } as MessageEvent);
+            if (!isSubscriberActive) return;
+            try {
+              subscriber.next({ data: event } as MessageEvent);
+            } catch (error) {
+              console.error('[YouTube] 콜백 전송 에러:', error);
+              isSubscriberActive = false;
+              controller.abort();
+            }
           },
           controller.signal,
         )
         .then((rssUrl) => {
-          void rssUrl;
+          void rssUrl; // SSE에서는 이미 complete 이벤트로 전달됨
+          clearTimeout(timeoutHandle);
+          if (!isSubscriberActive) return;
           subscriber.complete();
         })
         .catch((error) => {
-          if (controller.signal.aborted) return;
+          clearTimeout(timeoutHandle);
+          if (controller.signal.aborted) {
+            console.log('[YouTube] 처리 중단 — 에러 보내지 않음');
+            return;
+          }
+          if (!isSubscriberActive) return;
           const message =
             error instanceof Error ? error.message : 'Unknown error';
+          console.error('[YouTube] 처리 에러:', message);
           subscriber.next({
             data: { type: 'error', message },
           } as MessageEvent);
@@ -55,6 +82,8 @@ export class YoutubeController {
         });
 
       return () => {
+        isSubscriberActive = false;
+        clearTimeout(timeoutHandle);
         controller.abort();
         console.log('[YouTube] SSE 연결 종료 — 처리 중단');
       };
@@ -101,23 +130,50 @@ export class YoutubeController {
 
     return new Observable((subscriber) => {
       const controller = new AbortController();
+      let isSubscriberActive = true;
+
+      // 30분 타임아웃 (매우 긴 재생목록용)
+      const timeoutHandle = setTimeout(
+        () => {
+          if (!controller.signal.aborted) {
+            console.log('[YouTube] 업데이트 SSE 요청 타임아웃 — 연결 종료');
+            controller.abort();
+          }
+        },
+        30 * 60 * 1000,
+      );
 
       this.youtubeService
         .updateChannel(
           channelId,
           url,
           (event) => {
-            subscriber.next({ data: event } as MessageEvent);
+            if (!isSubscriberActive) return;
+            try {
+              subscriber.next({ data: event } as MessageEvent);
+            } catch (error) {
+              console.error('[YouTube] 업데이트 콜백 전송 에러:', error);
+              isSubscriberActive = false;
+              controller.abort();
+            }
           },
           controller.signal,
         )
         .then(() => {
+          clearTimeout(timeoutHandle);
+          if (!isSubscriberActive) return;
           subscriber.complete();
         })
         .catch((error) => {
-          if (controller.signal.aborted) return;
+          clearTimeout(timeoutHandle);
+          if (controller.signal.aborted) {
+            console.log('[YouTube] 업데이트 처리 중단 — 에러 보내지 않음');
+            return;
+          }
+          if (!isSubscriberActive) return;
           const message =
             error instanceof Error ? error.message : 'Unknown error';
+          console.error('[YouTube] 업데이트 처리 에러:', message);
           subscriber.next({
             data: { type: 'error', message },
           } as MessageEvent);
@@ -125,6 +181,8 @@ export class YoutubeController {
         });
 
       return () => {
+        isSubscriberActive = false;
+        clearTimeout(timeoutHandle);
         controller.abort();
         console.log(`[YouTube] 업데이트 SSE 연결 종료: ${fullChannelId}`);
       };

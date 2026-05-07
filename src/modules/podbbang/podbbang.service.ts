@@ -72,7 +72,11 @@ export class PodbbangService {
           }
 
           console.log(`[Podbbang] 페이지 ${pageNum + 1}/${numPages}`);
-          onProgress?.({ type: 'fetch_page', current: pageNum + 1, total: numPages });
+          onProgress?.({
+            type: 'fetch_page',
+            current: pageNum + 1,
+            total: numPages,
+          });
         }
       }
 

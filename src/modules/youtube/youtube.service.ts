@@ -516,6 +516,20 @@ export class YoutubeService {
     return await this.makeAudioUrl(videoId);
   }
 
+  private safeCallback(
+    callback: ProgressCallback | undefined,
+    event: YoutubeProgressEvent,
+    signal?: AbortSignal,
+  ): void {
+    if (!callback || signal?.aborted) return;
+    try {
+      callback(event);
+    } catch (error) {
+      console.error('[YouTube] 콜백 에러:', error);
+      // 콜백 에러는 무시하고 계속 진행
+    }
+  }
+
   private convertToVideo(videoInfo: VideoInfo): Video {
     return {
       id: videoInfo.videoId,
@@ -585,70 +599,106 @@ export class YoutubeService {
     }
 
     console.log(`[YouTube] 총 ${videoIds.length}개 영상 처리 시작`);
-    onProgress?.({ type: 'start', total: videoIds.length });
+    this.safeCallback(
+      onProgress,
+      { type: 'start', total: videoIds.length },
+      signal,
+    );
 
     const results: VideoInfo[] = [];
     const errors: { videoId: string; error: string }[] = [];
 
-    for (let i = 0; i < videoIds.length; i++) {
+    // 최대 5개씩 순차 처리 (병렬 처리로 인한 리소스 과다 사용 방지)
+    const BATCH_SIZE = 5;
+    for (
+      let batchStart = 0;
+      batchStart < videoIds.length;
+      batchStart += BATCH_SIZE
+    ) {
       if (signal?.aborted) {
         console.log('[YouTube] 처리 중단됨 (클라이언트 연결 종료)');
         break;
       }
 
-      const videoId = videoIds[i];
-      const current = i + 1;
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, videoIds.length);
+      const batchVideos = videoIds.slice(batchStart, batchEnd);
 
-      console.log(
-        `[YouTube] (${current}/${videoIds.length}) 처리 중: ${videoId}`,
+      await Promise.all(
+        batchVideos.map(async (videoId) => {
+          if (signal?.aborted) return;
+
+          const index = videoIds.indexOf(videoId, batchStart);
+          const current = index + 1;
+
+          console.log(
+            `[YouTube] (${current}/${videoIds.length}) 처리 중: ${videoId}`,
+          );
+          this.safeCallback(
+            onProgress,
+            {
+              type: 'video_start',
+              current,
+              total: videoIds.length,
+              videoId,
+            },
+            signal,
+          );
+
+          const keepaliveTimer = onProgress
+            ? setInterval(
+                () => this.safeCallback(onProgress, { type: 'ping' }, signal),
+                20000,
+              )
+            : null;
+
+          try {
+            const result = await this.processVideo(videoId);
+            results.push(result);
+            console.log(
+              `[YouTube] (${current}/${videoIds.length}) 완료: ${result.title}`,
+            );
+            this.safeCallback(
+              onProgress,
+              {
+                type: 'video_done',
+                current,
+                total: videoIds.length,
+                videoId,
+                title: result.title,
+              },
+              signal,
+            );
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            const isPrivate =
+              message.includes('Private video') ||
+              message.includes('Sign in if you');
+            console.warn(
+              `[YouTube] (${current}/${videoIds.length}) ${isPrivate ? '비공개 영상 건너뜀' : '오류'}: ${videoId} — ${message}`,
+            );
+            this.safeCallback(
+              onProgress,
+              {
+                type: 'video_skip',
+                current,
+                total: videoIds.length,
+                videoId,
+                reason: isPrivate ? '비공개 영상' : message,
+              },
+              signal,
+            );
+            errors.push({ videoId, error: message });
+          } finally {
+            if (keepaliveTimer) clearInterval(keepaliveTimer);
+          }
+        }),
       );
-      onProgress?.({
-        type: 'video_start',
-        current,
-        total: videoIds.length,
-        videoId,
-      });
 
-      const keepaliveTimer = onProgress
-        ? setInterval(() => onProgress({ type: 'ping' }), 20000)
-        : null;
-
-      try {
-        const result = await this.processVideo(videoId);
-        results.push(result);
-        console.log(
-          `[YouTube] (${current}/${videoIds.length}) 완료: ${result.title}`,
-        );
-        onProgress?.({
-          type: 'video_done',
-          current,
-          total: videoIds.length,
-          videoId,
-          title: result.title,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const isPrivate =
-          message.includes('Private video') ||
-          message.includes('Sign in if you');
-        console.warn(
-          `[YouTube] (${current}/${videoIds.length}) ${isPrivate ? '비공개 영상 건너뜀' : '오류'}: ${videoId} — ${message}`,
-        );
-        onProgress?.({
-          type: 'video_skip',
-          current,
-          total: videoIds.length,
-          videoId,
-          reason: isPrivate ? '비공개 영상' : message,
-        });
-        errors.push({ videoId, error: message });
-      } finally {
-        if (keepaliveTimer) clearInterval(keepaliveTimer);
-      }
-
-      if (i < videoIds.length - 1) {
+      // 배치 간 딜레이 (서버 리소스 회복 시간)
+      if (batchEnd < videoIds.length && !signal?.aborted) {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 2000);
+          const timer = setTimeout(resolve, 3000);
           signal?.addEventListener(
             'abort',
             () => {
@@ -702,6 +752,13 @@ export class YoutubeService {
     signal?: AbortSignal,
   ): Promise<string> {
     const result = await this.makeUrl(url, onProgress, signal);
+
+    // 연결 종료 후 DB 저장 시도를 방지
+    if (signal?.aborted) {
+      console.log('[YouTube] 연결 중단됨 — DB 저장 스킵');
+      throw new Error('Process aborted by client');
+    }
+
     const metadata = this.aggregateMetadata(result.videos);
 
     if (result.type === 'video' && result.videos.length > 0) {
@@ -728,13 +785,17 @@ export class YoutubeService {
       });
 
       const rssUrl = `${baseUrl}/rss/${channelId}`;
-      onProgress?.({
-        type: 'complete',
-        success: result.success,
-        failed: result.failed,
-        total: result.total,
-        rssUrl,
-      });
+      this.safeCallback(
+        onProgress,
+        {
+          type: 'complete',
+          success: result.success,
+          failed: result.failed,
+          total: result.total,
+          rssUrl,
+        },
+        signal,
+      );
       return rssUrl;
     }
 
@@ -761,13 +822,17 @@ export class YoutubeService {
       });
 
       const rssUrl = `${baseUrl}/rss/${channelId}`;
-      onProgress?.({
-        type: 'complete',
-        success: result.success,
-        failed: result.failed,
-        total: result.total,
-        rssUrl,
-      });
+      this.safeCallback(
+        onProgress,
+        {
+          type: 'complete',
+          success: result.success,
+          failed: result.failed,
+          total: result.total,
+          rssUrl,
+        },
+        signal,
+      );
       return rssUrl;
     }
 
@@ -792,18 +857,33 @@ export class YoutubeService {
       existingChannel.videos.map((v: Video) => v.id),
     );
     const result = await this.makeUrl(url, onProgress, signal);
+
+    // 연결 종료 후 DB 저장 시도를 방지
+    if (signal?.aborted) {
+      console.log('[YouTube] 연결 중단됨 — DB 저장 스텝');
+      throw new Error('Process aborted by client');
+    }
+
     const newVideos = result.videos.filter(
       (video) => !existingVideoIds.has(video.videoId),
     );
 
+    const baseUrl =
+      process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+    const rssUrl = `${baseUrl}/rss/${fullChannelId}`;
+
     if (newVideos.length === 0) {
-      onProgress?.({
-        type: 'complete',
-        success: 0,
-        failed: 0,
-        total: existingChannel.videos.length,
-        rssUrl: '',
-      });
+      this.safeCallback(
+        onProgress,
+        {
+          type: 'complete',
+          success: 0,
+          failed: 0,
+          total: result.total,
+          rssUrl,
+        },
+        signal,
+      );
       return {
         newEpisodes: 0,
         totalEpisodes: existingChannel.videos.length,
@@ -818,13 +898,17 @@ export class YoutubeService {
       updatedVideos,
     );
 
-    onProgress?.({
-      type: 'complete',
-      success: newVideos.length,
-      failed: 0,
-      total: result.total,
-      rssUrl: '',
-    });
+    this.safeCallback(
+      onProgress,
+      {
+        type: 'complete',
+        success: newVideos.length,
+        failed: result.failed,
+        total: result.total,
+        rssUrl,
+      },
+      signal,
+    );
 
     return {
       newEpisodes: newVideos.length,
