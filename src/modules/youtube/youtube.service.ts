@@ -608,97 +608,80 @@ export class YoutubeService {
     const results: VideoInfo[] = [];
     const errors: { videoId: string; error: string }[] = [];
 
-    // 최대 5개씩 순차 처리 (병렬 처리로 인한 리소스 과다 사용 방지)
-    const BATCH_SIZE = 5;
-    for (
-      let batchStart = 0;
-      batchStart < videoIds.length;
-      batchStart += BATCH_SIZE
-    ) {
+    for (let i = 0; i < videoIds.length; i++) {
       if (signal?.aborted) {
         console.log('[YouTube] 처리 중단됨 (클라이언트 연결 종료)');
         break;
       }
 
-      const batchEnd = Math.min(batchStart + BATCH_SIZE, videoIds.length);
-      const batchVideos = videoIds.slice(batchStart, batchEnd);
+      const videoId = videoIds[i];
+      const current = i + 1;
 
-      await Promise.all(
-        batchVideos.map(async (videoId) => {
-          if (signal?.aborted) return;
-
-          const index = videoIds.indexOf(videoId, batchStart);
-          const current = index + 1;
-
-          console.log(
-            `[YouTube] (${current}/${videoIds.length}) 처리 중: ${videoId}`,
-          );
-          this.safeCallback(
-            onProgress,
-            {
-              type: 'video_start',
-              current,
-              total: videoIds.length,
-              videoId,
-            },
-            signal,
-          );
-
-          const keepaliveTimer = onProgress
-            ? setInterval(
-                () => this.safeCallback(onProgress, { type: 'ping' }, signal),
-                20000,
-              )
-            : null;
-
-          try {
-            const result = await this.processVideo(videoId);
-            results.push(result);
-            console.log(
-              `[YouTube] (${current}/${videoIds.length}) 완료: ${result.title}`,
-            );
-            this.safeCallback(
-              onProgress,
-              {
-                type: 'video_done',
-                current,
-                total: videoIds.length,
-                videoId,
-                title: result.title,
-              },
-              signal,
-            );
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            const isPrivate =
-              message.includes('Private video') ||
-              message.includes('Sign in if you');
-            console.warn(
-              `[YouTube] (${current}/${videoIds.length}) ${isPrivate ? '비공개 영상 건너뜀' : '오류'}: ${videoId} — ${message}`,
-            );
-            this.safeCallback(
-              onProgress,
-              {
-                type: 'video_skip',
-                current,
-                total: videoIds.length,
-                videoId,
-                reason: isPrivate ? '비공개 영상' : message,
-              },
-              signal,
-            );
-            errors.push({ videoId, error: message });
-          } finally {
-            if (keepaliveTimer) clearInterval(keepaliveTimer);
-          }
-        }),
+      console.log(
+        `[YouTube] (${current}/${videoIds.length}) 처리 중: ${videoId}`,
+      );
+      this.safeCallback(
+        onProgress,
+        {
+          type: 'video_start',
+          current,
+          total: videoIds.length,
+          videoId,
+        },
+        signal,
       );
 
-      // 배치 간 딜레이 (서버 리소스 회복 시간)
-      if (batchEnd < videoIds.length && !signal?.aborted) {
+      const keepaliveTimer = onProgress
+        ? setInterval(
+            () => this.safeCallback(onProgress, { type: 'ping' }, signal),
+            20000,
+          )
+        : null;
+
+      try {
+        const result = await this.processVideo(videoId);
+        results.push(result);
+        console.log(
+          `[YouTube] (${current}/${videoIds.length}) 완료: ${result.title}`,
+        );
+        this.safeCallback(
+          onProgress,
+          {
+            type: 'video_done',
+            current,
+            total: videoIds.length,
+            videoId,
+            title: result.title,
+          },
+          signal,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const isPrivate =
+          message.includes('Private video') ||
+          message.includes('Sign in if you');
+        console.warn(
+          `[YouTube] (${current}/${videoIds.length}) ${isPrivate ? '비공개 영상 건너뜀' : '오류'}: ${videoId} — ${message}`,
+        );
+        this.safeCallback(
+          onProgress,
+          {
+            type: 'video_skip',
+            current,
+            total: videoIds.length,
+            videoId,
+            reason: isPrivate ? '비공개 영상' : message,
+          },
+          signal,
+        );
+        errors.push({ videoId, error: message });
+      } finally {
+        if (keepaliveTimer) clearInterval(keepaliveTimer);
+      }
+
+      if (i < videoIds.length - 1 && !signal?.aborted) {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, 3000);
+          const timer = setTimeout(resolve, 2000);
           signal?.addEventListener(
             'abort',
             () => {
