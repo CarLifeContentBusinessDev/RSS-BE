@@ -301,7 +301,7 @@ export class YoutubeService {
   }> {
     try {
       const ytDlpWrap = await this.resolveYtDlpWrap();
-      const output = await ytDlpWrap.execPromise([
+      const output = await this.execWithTimeout(ytDlpWrap, [
         '--flat-playlist',
         '--dump-single-json',
         '--playlist-reverse',
@@ -360,6 +360,30 @@ export class YoutubeService {
     return args;
   }
 
+  private async execWithTimeout(
+    wrapper: YTDlpWrap,
+    args: string[],
+  ): Promise<string> {
+    const timeoutMs = Number(process.env.YT_DLP_TIMEOUT_MS) || 120000;
+    const execPromise = wrapper.execPromise(args);
+    const timeoutPromise = new Promise<string>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`yt-dlp timeout after ${timeoutMs}ms`)),
+        timeoutMs,
+      ),
+    );
+
+    try {
+      return await Promise.race([execPromise, timeoutPromise]);
+    } catch (e) {
+      console.error(
+        '[YouTube] yt-dlp exec error/timeout:',
+        e instanceof Error ? e.message : String(e),
+      );
+      throw e;
+    }
+  }
+
   private async getChannelInfo(url: string): Promise<{
     channelInfo: {
       id: string;
@@ -377,7 +401,7 @@ export class YoutubeService {
   private async getVideoInfo(videoId: string): Promise<VideoInfo> {
     try {
       const ytDlpWrap = await this.resolveYtDlpWrap();
-      const output = await ytDlpWrap.execPromise([
+      const output = await this.execWithTimeout(ytDlpWrap, [
         '--dump-json',
         '--no-playlist',
         ...this.getBaseArgs(),
@@ -413,7 +437,7 @@ export class YoutubeService {
     const tempDir = await mkdtemp(join(tmpdir(), 'yt-audio-'));
     const tempFilePath = join(tempDir, 'audio.bin');
 
-    await ytDlpWrap.execPromise([
+    await this.execWithTimeout(ytDlpWrap, [
       '-f',
       'bestaudio',
       '--no-playlist',
