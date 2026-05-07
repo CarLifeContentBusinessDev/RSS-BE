@@ -354,8 +354,8 @@ export class YoutubeService {
 
   private getBaseArgs(): string[] {
     if (this.cookiesFilePath) {
-      // iOS/Android clients don't support cookies — use web client with cookies
-      return ['--cookies', this.cookiesFilePath];
+      // iOS/Android clients don't support cookies — use web client with cookies + Node.js for n-challenge
+      return ['--cookies', this.cookiesFilePath, '--js-runtimes', 'node'];
     }
     // No cookies: use mobile clients to reduce bot detection
     return [
