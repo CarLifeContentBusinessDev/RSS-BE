@@ -16,7 +16,7 @@ import {
   writeFile,
 } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { delimiter, dirname, join } from 'path';
 import { r2Config } from 'src/common/config/r2.config';
 import { ChannelDbService } from 'src/shared/services/channel-db.service';
 import { Video } from 'src/types/channel.types';
@@ -155,6 +155,13 @@ export class YoutubeService {
 
     if (!this.ytDlpInitPromise) {
       this.ytDlpInitPromise = (async () => {
+        // n-challenge solver가 node를 찾을 수 있도록 현재 프로세스의 node 경로를 PATH에 추가
+        const nodeBinDir = dirname(process.execPath);
+        const pathSep = delimiter;
+        if (!process.env.PATH?.includes(nodeBinDir)) {
+          process.env.PATH = `${nodeBinDir}${pathSep}${process.env.PATH || ''}`;
+        }
+
         const cacheDir =
           process.env.YT_DLP_CACHE_DIR ||
           join(process.cwd(), '.cache', 'yt-dlp');
@@ -191,6 +198,22 @@ export class YoutubeService {
         const binaryName =
           process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
         const binaryPath = join(cacheDir, binaryName);
+
+        // 14일 초과 시 재다운로드 — n-challenge solver 등 YouTube 대응 개선 반영
+        const MAX_BINARY_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+        if (await this.fileExists(binaryPath)) {
+          try {
+            const { mtimeMs } = await stat(binaryPath);
+            if (Date.now() - mtimeMs > MAX_BINARY_AGE_MS) {
+              console.log(
+                '[YouTube] yt-dlp 바이너리 14일 초과 — 최신 버전 다운로드 중...',
+              );
+              await rm(binaryPath, { force: true });
+            }
+          } catch {
+            // stat 실패 시 기존 파일 유지
+          }
+        }
 
         if (!(await this.fileExists(binaryPath))) {
           await YTDlpWrap.downloadFromGithub(binaryPath);
@@ -305,7 +328,7 @@ export class YoutubeService {
         '--flat-playlist',
         '--dump-single-json',
         '--playlist-reverse',
-        ...this.getBaseArgs(),
+        ...this.getTabArgs(),
         url,
       ]);
 
@@ -352,23 +375,27 @@ export class YoutubeService {
     }
   }
 
-  private getBaseArgs(): string[] {
+  // playlist/channel 목록 조회용 — youtube:tab 추출기가 데스크톱 HTML을 요구하므로 UA 오버라이드 없음
+  private getTabArgs(): string[] {
     if (this.cookiesFilePath) {
-      return [
-        '--cookies',
-        this.cookiesFilePath,
-        '--extractor-args',
-        'youtube:player_client=web,tv,web_safari',
-        '--user-agent',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
-      ];
+      return ['--cookies', this.cookiesFilePath];
     }
-    return [
+    return [];
+  }
+
+  // 개별 영상 정보/다운로드용 — web/web_safari 클라이언트는 쿠키 인증 시 PO Token 불필요
+  // yt-dlp 2026.03+ 기본값이 deno로 변경됨 — node를 명시적으로 지정해야 n-challenge 해결 가능
+  private getVideoArgs(): string[] {
+    const args: string[] = [
+      '--js-runtimes',
+      'node',
       '--extractor-args',
-      'youtube:player_client=ios,android,web',
-      '--user-agent',
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+      'youtube:player_client=web,web_safari',
     ];
+    if (this.cookiesFilePath) {
+      args.unshift('--cookies', this.cookiesFilePath);
+    }
+    return args;
   }
 
   private async execWithTimeout(
@@ -415,7 +442,7 @@ export class YoutubeService {
       const output = await this.execWithTimeout(ytDlpWrap, [
         '--dump-json',
         '--no-playlist',
-        ...this.getBaseArgs(),
+        ...this.getVideoArgs(),
         `https://www.youtube.com/watch?v=${videoId}`,
       ]);
 
@@ -450,10 +477,10 @@ export class YoutubeService {
 
     await this.execWithTimeout(ytDlpWrap, [
       '-f',
-      'bestaudio',
+      'bestaudio/best',
       '--no-playlist',
       '--no-part',
-      ...this.getBaseArgs(),
+      ...this.getVideoArgs(),
       '-o',
       tempFilePath,
       videoUrl,
@@ -989,13 +1016,13 @@ export class YoutubeService {
     try {
       const ytDlpWrap = await this.resolveYtDlpWrap();
       const version = await ytDlpWrap.getVersion();
-      const baseArgs = this.getBaseArgs();
+      const videoArgs = this.getVideoArgs();
 
       const args = [
         '--simulate',
         '--print',
         'title',
-        ...baseArgs,
+        ...videoArgs,
         'https://www.youtube.com/watch?v=jokNw9t1iaA',
       ];
 
@@ -1006,14 +1033,14 @@ export class YoutubeService {
         cookiesFilePath: this.cookiesFilePath,
         ytDlpVersion: version,
         testResult: output.trim(),
-        baseArgs,
+        baseArgs: videoArgs,
       };
     } catch (error) {
       return {
         ok: false,
         cookiesFilePath: this.cookiesFilePath,
         error: error instanceof Error ? error.message : String(error),
-        baseArgs: this.getBaseArgs(),
+        baseArgs: this.getVideoArgs(),
       };
     }
   }
