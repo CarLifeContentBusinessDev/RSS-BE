@@ -353,16 +353,17 @@ export class YoutubeService {
   }
 
   private getBaseArgs(): string[] {
-    const args = [
+    if (this.cookiesFilePath) {
+      // iOS/Android clients don't support cookies — use web client with cookies
+      return ['--cookies', this.cookiesFilePath];
+    }
+    // No cookies: use mobile clients to reduce bot detection
+    return [
       '--extractor-args',
       'youtube:player_client=ios,android,web',
       '--user-agent',
       'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
     ];
-    if (this.cookiesFilePath) {
-      args.push('--cookies', this.cookiesFilePath);
-    }
-    return args;
   }
 
   private async execWithTimeout(
@@ -726,8 +727,14 @@ export class YoutubeService {
         const isPrivate =
           message.includes('Private video') ||
           message.includes('Sign in if you');
+        const isDRM = message.includes('DRM protected');
+        const skipReason = isPrivate
+          ? '비공개 영상'
+          : isDRM
+            ? 'DRM 보호 영상'
+            : null;
         console.warn(
-          `[YouTube] (${current}/${videoIds.length}) ${isPrivate ? '비공개 영상 건너뜀' : '오류'}: ${videoId} — ${message}`,
+          `[YouTube] (${current}/${videoIds.length}) ${skipReason ? `${skipReason} 건너뜀` : '오류'}: ${videoId} — ${message}`,
         );
         this.safeCallback(
           onProgress,
@@ -736,7 +743,7 @@ export class YoutubeService {
             current,
             total: videoIds.length,
             videoId,
-            reason: isPrivate ? '비공개 영상' : message,
+            reason: skipReason ?? message,
           },
           signal,
         );
