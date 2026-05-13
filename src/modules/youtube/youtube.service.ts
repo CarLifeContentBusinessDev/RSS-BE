@@ -106,6 +106,8 @@ export class YoutubeService {
   private ytDlpWrap: YTDlpWrap | null = null;
   private ytDlpInitPromise: Promise<void> | null = null;
   private cookiesFilePath: string | null = null;
+  private cookiesLastFetchedMs: number = 0;
+  private static readonly COOKIES_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
   constructor(private readonly channelDbService: ChannelDbService) {
     if (
@@ -375,6 +377,34 @@ export class YoutubeService {
     }
   }
 
+  // R2에서 쿠키를 주기적으로 갱신 (6시간마다)
+  private async refreshCookiesIfStale(): Promise<void> {
+    const r2CookiesKey = process.env.YOUTUBE_COOKIES_R2_KEY;
+    if (!r2CookiesKey || !this.cookiesFilePath) return;
+    if (
+      Date.now() - this.cookiesLastFetchedMs <
+      YoutubeService.COOKIES_MAX_AGE_MS
+    )
+      return;
+
+    try {
+      const res = await this.s3Client.send(
+        new GetObjectCommand({
+          Bucket: r2Config.bucketName,
+          Key: r2CookiesKey,
+        }),
+      );
+      const body = await res.Body?.transformToString('utf-8');
+      if (body) {
+        await writeFile(this.cookiesFilePath, body, 'utf-8');
+        this.cookiesLastFetchedMs = Date.now();
+        console.log('[YouTube] 쿠키 파일 갱신 완료');
+      }
+    } catch (e) {
+      console.warn('[YouTube] 쿠키 파일 갱신 실패 (기존 파일 유지):', e);
+    }
+  }
+
   // playlist/channel 목록 조회용 — youtube:tab 추출기가 데스크톱 HTML을 요구하므로 UA 오버라이드 없음
   private getTabArgs(): string[] {
     if (this.cookiesFilePath) {
@@ -383,14 +413,14 @@ export class YoutubeService {
     return [];
   }
 
-  // 개별 영상 정보/다운로드용 — web/web_safari 클라이언트는 쿠키 인증 시 PO Token 불필요
+  // 개별 영상 정보/다운로드용 — ios 클라이언트는 PO Token 불필요 + 봇 감지 회피에 유리
   // yt-dlp 2026.03+ 기본값이 deno로 변경됨 — node를 명시적으로 지정해야 n-challenge 해결 가능
   private getVideoArgs(): string[] {
     const args: string[] = [
       '--js-runtimes',
       'node',
       '--extractor-args',
-      'youtube:player_client=web,web_safari',
+      'youtube:player_client=ios,mweb',
     ];
     if (this.cookiesFilePath) {
       args.unshift('--cookies', this.cookiesFilePath);
@@ -438,6 +468,7 @@ export class YoutubeService {
 
   private async getVideoInfo(videoId: string): Promise<VideoInfo> {
     try {
+      await this.refreshCookiesIfStale();
       const ytDlpWrap = await this.resolveYtDlpWrap();
       const output = await this.execWithTimeout(ytDlpWrap, [
         '--dump-json',
@@ -471,6 +502,7 @@ export class YoutubeService {
   private async downloadAudioFile(
     videoUrl: string,
   ): Promise<{ tempFilePath: string; tempDir: string }> {
+    await this.refreshCookiesIfStale();
     const ytDlpWrap = await this.resolveYtDlpWrap();
     const tempDir = await mkdtemp(join(tmpdir(), 'yt-audio-'));
     const tempFilePath = join(tempDir, 'audio.bin');
