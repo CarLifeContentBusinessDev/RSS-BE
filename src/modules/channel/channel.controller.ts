@@ -221,7 +221,7 @@ export class ChannelController {
           subscriber.next({
             data: {
               type: 'complete',
-              total: updated.videos.length,
+              total: updated.episodeCount,
             },
           } as MessageEvent);
           subscriber.complete();
@@ -321,7 +321,7 @@ export class ChannelController {
           subscriber.next({
             data: {
               type: 'complete',
-              total: updated.videos.length,
+              total: updated.episodeCount,
             },
           } as MessageEvent);
           subscriber.complete();

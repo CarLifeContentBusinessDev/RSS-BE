@@ -113,7 +113,7 @@ export class ChannelDbService {
       .from('channels')
       .update(updateData)
       .eq('id', channelId)
-      .select()
+      .select(this.channelListColumns as any)
       .single();
 
     if (error) {
@@ -121,7 +121,7 @@ export class ChannelDbService {
       throw new Error(error.message);
     }
 
-    return this.formatChannel(data);
+    return this.formatChannel(data as unknown as ChannelRow);
   }
 
   async deleteChannel(channelId: string): Promise<boolean> {
