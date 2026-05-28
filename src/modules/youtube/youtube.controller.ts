@@ -23,8 +23,19 @@ export class YoutubeController {
     this.BASE_URL = process.env.BASE_URL || `http://localhost:${port}`;
   }
 
+  private hasAuthorField(body: unknown): body is { author: unknown } {
+    if (typeof body !== 'object' || body === null) {
+      return false;
+    }
+
+    return 'author' in body;
+  }
+
   @Sse('process-stream')
-  processUrlStream(@Query('url') url: string): Observable<MessageEvent> {
+  processUrlStream(
+    @Query('url') url: string,
+    @Query('author') author?: string,
+  ): Observable<MessageEvent> {
     if (!url) {
       throw new HttpException('url is required', HttpStatus.BAD_REQUEST);
     }
@@ -57,6 +68,7 @@ export class YoutubeController {
             }
           },
           abortController.signal,
+          author,
         )
         .then((rssUrl) => {
           void rssUrl;
@@ -87,15 +99,22 @@ export class YoutubeController {
   }
 
   @Post('process')
-  async processUrl(@Body('url') url: string) {
+  async processUrl(@Body() body: { url?: string; author?: string }) {
     try {
+      const url = body.url;
+
       if (!url) {
         throw new HttpException('url is required', HttpStatus.BAD_REQUEST);
       }
 
+      const authorInput = this.hasAuthorField(body) ? body.author : undefined;
+
       const rssUrl = await this.youtubeService.processAndSave(
         url,
         this.BASE_URL,
+        undefined,
+        undefined,
+        authorInput,
       );
       return { rssUrl };
     } catch (error) {
@@ -117,6 +136,7 @@ export class YoutubeController {
   updateChannelStream(
     @Param('channelId') channelId: string,
     @Query('url') url: string,
+    @Query('author') author?: string,
   ): Observable<MessageEvent> {
     if (!url) {
       throw new HttpException('url is required', HttpStatus.BAD_REQUEST);
@@ -152,6 +172,7 @@ export class YoutubeController {
             }
           },
           abortController.signal,
+          author,
         )
         .then(() => {
           clearTimeout(timeoutHandle);
@@ -187,14 +208,49 @@ export class YoutubeController {
   @Post('update/:channelId')
   async updateChannel(
     @Param('channelId') channelId: string,
-    @Body('url') url: string,
+    @Body() body: unknown,
   ) {
     try {
+      // allow two modes: author-only update (fast) or full update with url
+      const hasAuthor = this.hasAuthorField(body);
+      const authorInput = hasAuthor ? body.author : undefined;
+
+      const bodyObj = body as { url?: string } | undefined;
+      const url = bodyObj?.url;
+
+      if (hasAuthor && !url) {
+        // author-only update requested (no url provided)
+        await this.youtubeService.updateChannelAuthorOnly(
+          channelId,
+          authorInput,
+        );
+        return { success: true, updated: 0 };
+      }
+
+      // If author provided and url equals stored channel url, treat as author-only to avoid full processing
+      if (hasAuthor && typeof url === 'string') {
+        const existing = await this.youtubeService.getChannel(channelId);
+        if (existing && existing.url === url) {
+          await this.youtubeService.updateChannelAuthorOnly(
+            channelId,
+            authorInput,
+          );
+          return { success: true, updated: 0 };
+        }
+      }
+
       if (!url) {
         throw new HttpException('url is required', HttpStatus.BAD_REQUEST);
       }
 
-      const updated = await this.youtubeService.updateChannel(channelId, url);
+      const updated = await this.youtubeService.updateChannel(
+        channelId,
+        url,
+        undefined,
+        undefined,
+        authorInput,
+      );
+
       return {
         success: true,
         updated: updated.newEpisodes,

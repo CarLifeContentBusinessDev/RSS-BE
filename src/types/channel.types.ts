@@ -29,6 +29,7 @@ export interface Video {
   id: string;
   title: string;
   description?: string;
+  author?: string;
   url: string;
   audioPath?: string;
   audioSize?: number;

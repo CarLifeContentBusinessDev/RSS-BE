@@ -19,7 +19,7 @@ import { tmpdir } from 'os';
 import { delimiter, dirname, join } from 'path';
 import { r2Config } from 'src/common/config/r2.config';
 import { ChannelDbService } from 'src/shared/services/channel-db.service';
-import { Video } from 'src/types/channel.types';
+import { Video, Channel } from 'src/types/channel.types';
 import type { Json } from 'src/types/database.types';
 import { VideoInfo } from 'src/types/youtube.types';
 import YTDlpWrap from 'yt-dlp-wrap';
@@ -108,8 +108,7 @@ export class YoutubeService {
   private cookiesFilePath: string | null = null;
   private cookiesLastFetchedMs: number = 0;
   private static readonly COOKIES_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-  constructor(private readonly channelDbService: ChannelDbService) {
+  constructor(private channelDbService: ChannelDbService) {
     if (
       !r2Config.endpoint ||
       !r2Config.accessKeyId ||
@@ -666,6 +665,7 @@ export class YoutubeService {
       id: videoInfo.videoId,
       title: videoInfo.title,
       description: videoInfo.description || undefined,
+      author: videoInfo.author || undefined,
       url: `https://www.youtube.com/watch?v=${videoInfo.videoId}`,
       audioPath: videoInfo.audioUrl,
       audioSize: videoInfo.audioSize,
@@ -870,6 +870,7 @@ export class YoutubeService {
     baseUrl: string,
     onProgress?: ProgressCallback,
     signal?: AbortSignal,
+    authorInput?: unknown,
   ): Promise<string> {
     const result = await this.makeUrl(url, onProgress, signal);
 
@@ -880,10 +881,12 @@ export class YoutubeService {
     }
 
     const metadata = this.aggregateMetadata(result.videos);
+    const parsedAuthor = this.parseAuthorInput(authorInput);
 
     if (result.type === 'video' && result.videos.length > 0) {
       const firstVideo = result.videos[0];
       const channelId = `youtube-video-${firstVideo.videoId}`;
+      const feedAuthor = parsedAuthor ?? firstVideo.author;
 
       await this.channelDbService.addChannel({
         id: channelId,
@@ -895,12 +898,12 @@ export class YoutubeService {
           this.convertToVideo(v),
         ) as unknown as Json,
         description: firstVideo.description || undefined,
-        author: firstVideo.author,
+        author: parsedAuthor ?? undefined,
         language: 'ko',
         category: metadata.category,
         content_type: metadata.contentType,
-        publisher: firstVideo.author,
-        host: firstVideo.author,
+        publisher: feedAuthor,
+        host: feedAuthor,
         tags: metadata.tags as unknown as Json,
       });
 
@@ -921,6 +924,9 @@ export class YoutubeService {
 
     if (result.channelInfo) {
       const channelId = `youtube-${result.channelInfo.id}`;
+      const defaultAuthor =
+        result.videos[0]?.author || result.channelInfo.author || undefined;
+      const feedAuthor = parsedAuthor ?? defaultAuthor;
 
       await this.channelDbService.addChannel({
         id: channelId,
@@ -932,12 +938,12 @@ export class YoutubeService {
           this.convertToVideo(v),
         ) as unknown as Json,
         description: result.channelInfo.description,
-        author: result.channelInfo.author,
+        author: parsedAuthor ?? undefined,
         language: 'ko',
         category: metadata.category,
         content_type: metadata.contentType,
-        publisher: result.channelInfo.author,
-        host: result.channelInfo.author,
+        publisher: feedAuthor,
+        host: feedAuthor,
         tags: metadata.tags as unknown as Json,
       });
 
@@ -964,6 +970,7 @@ export class YoutubeService {
     url: string,
     onProgress?: ProgressCallback,
     signal?: AbortSignal,
+    authorInput?: unknown,
   ): Promise<{ newEpisodes: number; totalEpisodes: number }> {
     const fullChannelId = `youtube-${channelId}`;
     const existingChannel =
@@ -972,6 +979,8 @@ export class YoutubeService {
     if (!existingChannel) {
       throw new Error('Channel not found');
     }
+
+    const parsedAuthor = this.parseAuthorInput(authorInput);
 
     const existingVideoIds = new Set(
       existingChannel.videos.map((v: Video) => v.id),
@@ -1018,6 +1027,16 @@ export class YoutubeService {
       updatedVideos,
     );
 
+    if (parsedAuthor !== undefined) {
+      const defaultAuthor = newVideos[0]?.author || existingChannel.host;
+      const feedAuthor = parsedAuthor ?? defaultAuthor;
+      await this.channelDbService.updateChannelMetadata(fullChannelId, {
+        author: parsedAuthor,
+        publisher: feedAuthor,
+        host: feedAuthor,
+      });
+    }
+
     this.safeCallback(
       onProgress,
       {
@@ -1034,6 +1053,22 @@ export class YoutubeService {
       newEpisodes: newVideos.length,
       totalEpisodes: updatedVideos.length,
     };
+  }
+
+  // Update only channel author without fetching/updating videos.
+  async updateChannelAuthorOnly(
+    channelId: string,
+    authorInput: unknown,
+  ): Promise<void> {
+    const fullChannelId = `youtube-${channelId}`;
+    const parsedAuthor = this.parseAuthorInput(authorInput);
+
+    // parsedAuthor: undefined => no-op, null => clear author, string => set
+    if (parsedAuthor === undefined) return;
+
+    await this.channelDbService.updateChannelMetadata(fullChannelId, {
+      author: parsedAuthor,
+    });
   }
 
   // ⚠️ 임시 디버그용 — 진단 끝나면 삭제
@@ -1075,5 +1110,24 @@ export class YoutubeService {
         baseArgs: this.getVideoArgs(),
       };
     }
+  }
+
+  private parseAuthorInput(authorInput: unknown): string | null | undefined {
+    if (authorInput === undefined) {
+      return undefined;
+    }
+
+    if (typeof authorInput !== 'string') {
+      return undefined;
+    }
+
+    const trimmed = authorInput.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  // Expose channel lookup for controller-level decisions (author-only shortcut)
+  async getChannel(channelId: string): Promise<Channel | null> {
+    const fullChannelId = `youtube-${channelId}`;
+    return this.channelDbService.getChannel(fullChannelId);
   }
 }

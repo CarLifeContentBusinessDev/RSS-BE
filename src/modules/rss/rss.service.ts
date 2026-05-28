@@ -5,6 +5,9 @@ import { Channel, Video } from 'src/types/channel.types';
 @Injectable()
 export class RssService {
   generateRSS(channelInfo: Channel, videos: Video[], baseUrl: string): string {
+    const defaultAuthor =
+      channelInfo.host || channelInfo.author || videos[0]?.author || 'Unknown';
+
     const feed = new Podcast({
       title: channelInfo.title || 'Podcast Channel',
       description:
@@ -12,16 +15,12 @@ export class RssService {
       feedUrl: `${baseUrl}/rss/${channelInfo.id}`,
       siteUrl: channelInfo.url || baseUrl,
       imageUrl: channelInfo.thumbnail || '',
-      author: channelInfo.author || channelInfo.copyright || 'Unknown',
+      author: channelInfo.author || defaultAuthor,
       copyright: channelInfo.copyright || channelInfo.author || '',
       language: channelInfo.language || 'ko',
-      itunesAuthor: channelInfo.host || channelInfo.author || 'Unknown',
+      itunesAuthor: defaultAuthor,
       itunesOwner: {
-        name:
-          channelInfo.owner?.name ||
-          channelInfo.host ||
-          channelInfo.author ||
-          'Unknown',
+        name: channelInfo.owner?.name || defaultAuthor,
         email: channelInfo.owner?.email || 'noreply@example.com',
       },
       itunesSummary: channelInfo.summary || channelInfo.description || '',
@@ -53,6 +52,7 @@ export class RssService {
           type: string;
           size: number;
         };
+        author?: string;
         itunesDuration?: number;
       } = {
         title: video.title,
@@ -60,12 +60,14 @@ export class RssService {
         url: video.url,
         guid: video.id,
         date: video.publishedAt || video.uploadDate || new Date(),
-        itunesAuthor: channelInfo.host || channelInfo.author || 'Unknown',
+        itunesAuthor: channelInfo.author || video.author || defaultAuthor,
         itunesExplicit: false,
         itunesSubtitle: video.title,
         itunesSummary: video.description || video.title,
         itunesEpisodeType: 'full' as const,
       };
+
+      item.author = channelInfo.author || video.author || defaultAuthor;
 
       if (video.thumbnail) {
         item.itunesImage = video.thumbnail;

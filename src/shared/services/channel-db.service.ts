@@ -124,6 +124,60 @@ export class ChannelDbService {
     return this.formatChannel(data as unknown as ChannelRow);
   }
 
+  async updateChannelMetadata(
+    channelId: string,
+    metadata: Pick<ChannelUpdate, 'author' | 'publisher' | 'host'>,
+  ): Promise<Channel> {
+    const supabase = this.supabaseService.getClient();
+
+    const updateData: ChannelUpdate = {
+      author: metadata.author ?? null,
+      publisher: metadata.publisher ?? null,
+      host: metadata.host ?? null,
+      last_update: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('channels')
+      .update(updateData)
+      .eq('id', channelId)
+      .select(this.channelListColumns as any)
+      .single();
+
+    if (error) {
+      console.error('Failed to update channel metadata:', error);
+      throw new Error(error.message);
+    }
+
+    return this.formatChannel(data as unknown as ChannelRow);
+  }
+
+  async updateChannelAuthor(
+    channelId: string,
+    author: string | null,
+  ): Promise<Channel> {
+    const supabase = this.supabaseService.getClient();
+
+    const updateData: ChannelUpdate = {
+      author: author ?? null,
+      last_update: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('channels')
+      .update(updateData)
+      .eq('id', channelId)
+      .select(this.channelListColumns as any)
+      .single();
+
+    if (error) {
+      console.error('Failed to update channel author:', error);
+      throw new Error(error.message);
+    }
+
+    return this.formatChannel(data as unknown as ChannelRow);
+  }
+
   async deleteChannel(channelId: string): Promise<boolean> {
     const supabase = this.supabaseService.getClient();
 
