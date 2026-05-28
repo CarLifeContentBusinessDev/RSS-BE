@@ -355,7 +355,7 @@ export class YoutubeService {
             (type === 'playlist' ? 'YouTube Playlist' : 'YouTube Channel'),
           url,
           thumbnail: info.thumbnail || undefined,
-          author: info.uploader || info.channel || undefined,
+          author: info.channel || info.uploader || undefined,
           description: info.description || undefined,
         },
         videoIds,
@@ -482,7 +482,7 @@ export class YoutubeService {
         title: info.title,
         description: info.description || null,
         thumbnail: info.thumbnail,
-        author: info.uploader || info.channel || 'Unknown',
+        author: info.channel || info.uploader || 'Unknown',
         publishedAt: parseYouTubeDate(info.upload_date),
         audioUrl: '',
         audioSize: 0,
@@ -898,7 +898,7 @@ export class YoutubeService {
           this.convertToVideo(v),
         ) as unknown as Json,
         description: firstVideo.description || undefined,
-        author: parsedAuthor ?? undefined,
+        author: feedAuthor,
         language: 'ko',
         category: metadata.category,
         content_type: metadata.contentType,
@@ -925,7 +925,7 @@ export class YoutubeService {
     if (result.channelInfo) {
       const channelId = `youtube-${result.channelInfo.id}`;
       const defaultAuthor =
-        result.videos[0]?.author || result.channelInfo.author || undefined;
+        result.channelInfo.author || result.videos[0]?.author || undefined;
       const feedAuthor = parsedAuthor ?? defaultAuthor;
 
       await this.channelDbService.addChannel({
@@ -938,7 +938,7 @@ export class YoutubeService {
           this.convertToVideo(v),
         ) as unknown as Json,
         description: result.channelInfo.description,
-        author: parsedAuthor ?? undefined,
+        author: feedAuthor,
         language: 'ko',
         category: metadata.category,
         content_type: metadata.contentType,
@@ -1035,6 +1035,17 @@ export class YoutubeService {
         publisher: feedAuthor,
         host: feedAuthor,
       });
+    } else if (!existingChannel.author) {
+      const defaultAuthor =
+        newVideos[0]?.author || existingChannel.host || undefined;
+
+      if (defaultAuthor) {
+        await this.channelDbService.updateChannelMetadata(fullChannelId, {
+          author: defaultAuthor,
+          publisher: existingChannel.publisher || defaultAuthor,
+          host: existingChannel.host || defaultAuthor,
+        });
+      }
     }
 
     this.safeCallback(

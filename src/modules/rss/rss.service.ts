@@ -60,14 +60,14 @@ export class RssService {
         url: video.url,
         guid: video.id,
         date: video.publishedAt || video.uploadDate || new Date(),
-        itunesAuthor: channelInfo.author || video.author || defaultAuthor,
+        itunesAuthor: video.author || channelInfo.author || defaultAuthor,
         itunesExplicit: false,
         itunesSubtitle: video.title,
         itunesSummary: video.description || video.title,
         itunesEpisodeType: 'full' as const,
       };
 
-      item.author = channelInfo.author || video.author || defaultAuthor;
+      item.author = video.author || channelInfo.author || defaultAuthor;
 
       if (video.thumbnail) {
         item.itunesImage = video.thumbnail;
