@@ -625,6 +625,38 @@ export class YoutubeService {
     }
   }
 
+  private getImageExtension(mimetype: string): string {
+    switch (mimetype) {
+      case 'image/png':
+        return 'png';
+      case 'image/webp':
+        return 'webp';
+      default:
+        return 'jpg';
+    }
+  }
+
+  // 사용자가 업로드한 채널 커스텀 이미지를 R2에 저장하고 공개 URL을 반환
+  private async uploadChannelImage(
+    channelId: string,
+    imageFile: { buffer: Buffer; mimetype: string },
+  ): Promise<string> {
+    const ext = this.getImageExtension(imageFile.mimetype);
+    const imageKey = `${process.env.DOWNLOAD_FOLDER}/images/${channelId}.${ext}`;
+
+    await this.s3Client.send(
+      new PutObjectCommand({
+        Bucket: r2Config.bucketName,
+        Key: imageKey,
+        Body: imageFile.buffer,
+        ContentType: imageFile.mimetype,
+        ContentLength: imageFile.buffer.length,
+      }),
+    );
+
+    return `${r2Config.publicUrl}/${imageKey}`;
+  }
+
   async makeAudioUrl(videoId: string): Promise<VideoInfo> {
     try {
       const videoInfo = await this.getVideoInfo(videoId);
@@ -871,6 +903,7 @@ export class YoutubeService {
     onProgress?: ProgressCallback,
     signal?: AbortSignal,
     authorInput?: unknown,
+    imageFile?: { buffer: Buffer; mimetype: string },
   ): Promise<string> {
     const result = await this.makeUrl(url, onProgress, signal);
 
@@ -887,12 +920,15 @@ export class YoutubeService {
       const firstVideo = result.videos[0];
       const channelId = `youtube-video-${firstVideo.videoId}`;
       const feedAuthor = parsedAuthor ?? firstVideo.author;
+      const thumbnail = imageFile
+        ? await this.uploadChannelImage(channelId, imageFile)
+        : firstVideo.thumbnail;
 
       await this.channelDbService.addChannel({
         id: channelId,
         title: firstVideo.title,
         url: `https://www.youtube.com/watch?v=${firstVideo.videoId}`,
-        thumbnail: firstVideo.thumbnail,
+        thumbnail,
         type: 'youtube',
         videos: result.videos.map((v) =>
           this.convertToVideo(v),
@@ -927,12 +963,15 @@ export class YoutubeService {
       const defaultAuthor =
         result.channelInfo.author || result.videos[0]?.author || undefined;
       const feedAuthor = parsedAuthor ?? defaultAuthor;
+      const thumbnail = imageFile
+        ? await this.uploadChannelImage(channelId, imageFile)
+        : result.channelInfo.thumbnail;
 
       await this.channelDbService.addChannel({
         id: channelId,
         title: result.channelInfo.title,
         url: result.channelInfo.url,
-        thumbnail: result.channelInfo.thumbnail,
+        thumbnail,
         type: 'youtube',
         videos: result.videos.map((v) =>
           this.convertToVideo(v),
@@ -971,6 +1010,7 @@ export class YoutubeService {
     onProgress?: ProgressCallback,
     signal?: AbortSignal,
     authorInput?: unknown,
+    imageFile?: { buffer: Buffer; mimetype: string },
   ): Promise<{ newEpisodes: number; totalEpisodes: number }> {
     const fullChannelId = `youtube-${channelId}`;
     const existingChannel =
@@ -981,6 +1021,9 @@ export class YoutubeService {
     }
 
     const parsedAuthor = this.parseAuthorInput(authorInput);
+    const thumbnail = imageFile
+      ? await this.uploadChannelImage(fullChannelId, imageFile)
+      : undefined;
 
     const existingVideoIds = new Set(
       existingChannel.videos.map((v: Video) => v.id),
@@ -1002,6 +1045,11 @@ export class YoutubeService {
     const rssUrl = `${baseUrl}/rss/${fullChannelId}`;
 
     if (newVideos.length === 0) {
+      if (thumbnail) {
+        await this.channelDbService.updateChannelMetadata(fullChannelId, {
+          thumbnail,
+        });
+      }
       this.safeCallback(
         onProgress,
         {
@@ -1027,25 +1075,39 @@ export class YoutubeService {
       updatedVideos,
     );
 
+    const metadataUpdates: {
+      author?: string | null;
+      publisher?: string;
+      host?: string;
+      thumbnail?: string;
+    } = {};
+
     if (parsedAuthor !== undefined) {
       const defaultAuthor = newVideos[0]?.author || existingChannel.host;
       const feedAuthor = parsedAuthor ?? defaultAuthor;
-      await this.channelDbService.updateChannelMetadata(fullChannelId, {
-        author: parsedAuthor,
-        publisher: feedAuthor,
-        host: feedAuthor,
-      });
+      metadataUpdates.author = parsedAuthor;
+      metadataUpdates.publisher = feedAuthor;
+      metadataUpdates.host = feedAuthor;
     } else if (!existingChannel.author) {
       const defaultAuthor =
         newVideos[0]?.author || existingChannel.host || undefined;
 
       if (defaultAuthor) {
-        await this.channelDbService.updateChannelMetadata(fullChannelId, {
-          author: defaultAuthor,
-          publisher: existingChannel.publisher || defaultAuthor,
-          host: existingChannel.host || defaultAuthor,
-        });
+        metadataUpdates.author = defaultAuthor;
+        metadataUpdates.publisher = existingChannel.publisher || defaultAuthor;
+        metadataUpdates.host = existingChannel.host || defaultAuthor;
       }
+    }
+
+    if (thumbnail) {
+      metadataUpdates.thumbnail = thumbnail;
+    }
+
+    if (Object.keys(metadataUpdates).length > 0) {
+      await this.channelDbService.updateChannelMetadata(
+        fullChannelId,
+        metadataUpdates,
+      );
     }
 
     this.safeCallback(
@@ -1066,20 +1128,35 @@ export class YoutubeService {
     };
   }
 
-  // Update only channel author without fetching/updating videos.
+  // Update only channel author/thumbnail without fetching/updating videos.
   async updateChannelAuthorOnly(
     channelId: string,
     authorInput: unknown,
+    imageFile?: { buffer: Buffer; mimetype: string },
   ): Promise<void> {
     const fullChannelId = `youtube-${channelId}`;
     const parsedAuthor = this.parseAuthorInput(authorInput);
 
-    // parsedAuthor: undefined => no-op, null => clear author, string => set
-    if (parsedAuthor === undefined) return;
+    const metadataUpdates: { author?: string | null; thumbnail?: string } = {};
 
-    await this.channelDbService.updateChannelMetadata(fullChannelId, {
-      author: parsedAuthor,
-    });
+    // parsedAuthor: undefined => no-op, null => clear author, string => set
+    if (parsedAuthor !== undefined) {
+      metadataUpdates.author = parsedAuthor;
+    }
+
+    if (imageFile) {
+      metadataUpdates.thumbnail = await this.uploadChannelImage(
+        fullChannelId,
+        imageFile,
+      );
+    }
+
+    if (Object.keys(metadataUpdates).length === 0) return;
+
+    await this.channelDbService.updateChannelMetadata(
+      fullChannelId,
+      metadataUpdates,
+    );
   }
 
   // ⚠️ 임시 디버그용 — 진단 끝나면 삭제

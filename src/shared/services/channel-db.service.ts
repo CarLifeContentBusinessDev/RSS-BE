@@ -126,14 +126,14 @@ export class ChannelDbService {
 
   async updateChannelMetadata(
     channelId: string,
-    metadata: Pick<ChannelUpdate, 'author' | 'publisher' | 'host'>,
+    metadata: Partial<
+      Pick<ChannelUpdate, 'author' | 'publisher' | 'host' | 'thumbnail'>
+    >,
   ): Promise<Channel> {
     const supabase = this.supabaseService.getClient();
 
     const updateData: ChannelUpdate = {
-      author: metadata.author ?? null,
-      publisher: metadata.publisher ?? null,
-      host: metadata.host ?? null,
+      ...metadata,
       last_update: new Date().toISOString(),
     };
 

@@ -10,9 +10,21 @@ import {
   Sse,
   MessageEvent,
   Get,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Observable } from 'rxjs';
 import { YoutubeService } from './youtube.service';
+
+const ALLOWED_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+
+interface UploadedImageFile {
+  buffer: Buffer;
+  mimetype: string;
+  size: number;
+}
 
 @Controller('youtube')
 export class YoutubeController {
@@ -29,6 +41,15 @@ export class YoutubeController {
     }
 
     return 'author' in body;
+  }
+
+  private validateImage(image: UploadedImageFile): void {
+    if (!ALLOWED_IMAGE_MIME_TYPES.includes(image.mimetype)) {
+      throw new HttpException(
+        'Unsupported image type. Use JPEG, PNG, or WebP.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
   }
 
   @Sse('process-stream')
@@ -99,12 +120,22 @@ export class YoutubeController {
   }
 
   @Post('process')
-  async processUrl(@Body() body: { url?: string; author?: string }) {
+  @UseInterceptors(
+    FileInterceptor('image', { limits: { fileSize: MAX_IMAGE_SIZE_BYTES } }),
+  )
+  async processUrl(
+    @Body() body: { url?: string; author?: string },
+    @UploadedFile() image?: UploadedImageFile,
+  ) {
     try {
       const url = body.url;
 
       if (!url) {
         throw new HttpException('url is required', HttpStatus.BAD_REQUEST);
+      }
+
+      if (image) {
+        this.validateImage(image);
       }
 
       const authorInput = this.hasAuthorField(body) ? body.author : undefined;
@@ -115,6 +146,7 @@ export class YoutubeController {
         undefined,
         undefined,
         authorInput,
+        image ? { buffer: image.buffer, mimetype: image.mimetype } : undefined,
       );
       return { rssUrl };
     } catch (error) {
@@ -206,34 +238,47 @@ export class YoutubeController {
   }
 
   @Post('update/:channelId')
+  @UseInterceptors(
+    FileInterceptor('image', { limits: { fileSize: MAX_IMAGE_SIZE_BYTES } }),
+  )
   async updateChannel(
     @Param('channelId') channelId: string,
     @Body() body: unknown,
+    @UploadedFile() image?: UploadedImageFile,
   ) {
     try {
-      // allow two modes: author-only update (fast) or full update with url
+      if (image) {
+        this.validateImage(image);
+      }
+
+      // allow two modes: author/image-only update (fast) or full update with url
       const hasAuthor = this.hasAuthorField(body);
       const authorInput = hasAuthor ? body.author : undefined;
+      const imageInput = image
+        ? { buffer: image.buffer, mimetype: image.mimetype }
+        : undefined;
 
       const bodyObj = body as { url?: string } | undefined;
       const url = bodyObj?.url;
 
-      if (hasAuthor && !url) {
-        // author-only update requested (no url provided)
+      if ((hasAuthor || imageInput) && !url) {
+        // author/image-only update requested (no url provided)
         await this.youtubeService.updateChannelAuthorOnly(
           channelId,
           authorInput,
+          imageInput,
         );
         return { success: true, updated: 0 };
       }
 
-      // If author provided and url equals stored channel url, treat as author-only to avoid full processing
-      if (hasAuthor && typeof url === 'string') {
+      // If author/image provided and url equals stored channel url, treat as author/image-only to avoid full processing
+      if ((hasAuthor || imageInput) && typeof url === 'string') {
         const existing = await this.youtubeService.getChannel(channelId);
         if (existing && existing.url === url) {
           await this.youtubeService.updateChannelAuthorOnly(
             channelId,
             authorInput,
+            imageInput,
           );
           return { success: true, updated: 0 };
         }
@@ -249,6 +294,7 @@ export class YoutubeController {
         undefined,
         undefined,
         authorInput,
+        imageInput,
       );
 
       return {
