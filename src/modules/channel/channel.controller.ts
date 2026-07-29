@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { ChannelDbService } from '../../shared/services/channel-db.service';
+import { R2StorageService } from '../../shared/services/r2-storage.service';
 import { PodbbangService } from '../podbbang/podbbang.service';
 import { PodbbangProgressCallback } from '../podbbang/podbbang.service';
 import { SpotifyService } from '../spotify/spotify.service';
@@ -23,6 +24,7 @@ import { ApplePodcastsService } from '../apple-podcasts/apple-podcasts.service';
 export class ChannelController {
   constructor(
     private readonly channelDbService: ChannelDbService,
+    private readonly r2StorageService: R2StorageService,
     private readonly podbbangService: PodbbangService,
     private readonly spotifyService: SpotifyService,
     private readonly applePodcastsService: ApplePodcastsService,
@@ -60,6 +62,20 @@ export class ChannelController {
       const channel = await this.channelDbService.getChannel(channelId);
       if (!channel) {
         throw new HttpException('Channel not found', HttpStatus.NOT_FOUND);
+      }
+
+      const r2Keys = [
+        this.r2StorageService.extractKey(channel.thumbnail),
+        ...channel.videos.map((video) =>
+          this.r2StorageService.extractKey(video.audioPath),
+        ),
+      ].filter((key): key is string => key !== null);
+
+      try {
+        await this.r2StorageService.deleteObjects(r2Keys);
+      } catch (error) {
+        // R2 정리가 실패해도 채널 삭제 자체는 계속 진행한다
+        console.error('Failed to delete R2 objects for channel:', error);
       }
 
       await this.channelDbService.deleteChannel(channelId);
