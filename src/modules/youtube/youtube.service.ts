@@ -958,6 +958,12 @@ export class YoutubeService {
       return rssUrl;
     }
 
+    if (result.channelInfo && result.videos.length === 0) {
+      throw new Error(
+        `Failed to fetch any videos: ${result.failed}/${result.total} failed`,
+      );
+    }
+
     if (result.channelInfo) {
       const channelId = `youtube-${result.channelInfo.id}`;
       const defaultAuthor =
@@ -1055,12 +1061,19 @@ export class YoutubeService {
         {
           type: 'complete',
           success: 0,
-          failed: 0,
+          failed: result.failed,
           total: result.total,
           rssUrl,
         },
         signal,
       );
+
+      if (result.failed > 0 && result.success === 0) {
+        throw new Error(
+          `Failed to fetch videos: ${result.failed}/${result.total} failed`,
+        );
+      }
+
       return {
         newEpisodes: 0,
         totalEpisodes: existingChannel.videos.length,
