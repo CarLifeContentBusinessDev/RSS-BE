@@ -6,6 +6,7 @@ import { PodbbangModule } from './modules/podbbang/podbbang.module';
 import { SpotifyModule } from './modules/spotify/spotify.module';
 import { YoutubeModule } from './modules/youtube/youtube.module';
 import { ApplePodcastsModule } from './modules/apple-podcasts/apple-podcasts.module';
+import { CustomModule } from './modules/custom/custom.module';
 import { AppController } from './app.controller';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TasksService } from './tasts/tasks.service';
@@ -20,6 +21,7 @@ import { TasksService } from './tasts/tasks.service';
     SpotifyModule,
     YoutubeModule,
     ApplePodcastsModule,
+    CustomModule,
   ],
   controllers: [AppController],
   providers: [TasksService],

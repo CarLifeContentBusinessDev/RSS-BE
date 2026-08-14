@@ -60,11 +60,10 @@ export class ChannelDbService {
 
   async getAllChannels(includeVideos = false): Promise<Channel[]> {
     const supabase = this.supabaseService.getClient();
-    const selectColumns = includeVideos ? '*' : this.channelListColumns;
 
     const { data, error } = await supabase
       .from('channels')
-      .select(selectColumns as any)
+      .select(this.channelListColumns as any)
       .order('added_at', { ascending: false });
 
     if (error) {
@@ -72,8 +71,43 @@ export class ChannelDbService {
       throw new Error(error.message);
     }
 
-    return (data ?? []).map((channel) =>
+    const channels = (data ?? []).map((channel) =>
       this.formatChannel(channel as unknown as ChannelRow),
+    );
+
+    if (!includeVideos) {
+      return channels;
+    }
+
+    const customIds = channels
+      .filter((channel) => channel.type === 'custom')
+      .map((channel) => channel.id);
+
+    if (customIds.length === 0) {
+      return channels;
+    }
+
+    const { data: videoRows, error: videoError } = await supabase
+      .from('channels')
+      .select('id,videos')
+      .in('id', customIds);
+
+    if (videoError) {
+      console.error('Failed to get channel videos:', videoError);
+      throw new Error(videoError.message);
+    }
+
+    const videosById = new Map<string, Video[]>(
+      (videoRows ?? []).map((row: { id: string; videos: Json }) => [
+        row.id,
+        (row.videos as unknown as Video[]) || [],
+      ]),
+    );
+
+    return channels.map((channel) =>
+      videosById.has(channel.id)
+        ? { ...channel, videos: videosById.get(channel.id)! }
+        : channel,
     );
   }
 
@@ -127,7 +161,10 @@ export class ChannelDbService {
   async updateChannelMetadata(
     channelId: string,
     metadata: Partial<
-      Pick<ChannelUpdate, 'author' | 'publisher' | 'host' | 'thumbnail'>
+      Pick<
+        ChannelUpdate,
+        'author' | 'publisher' | 'host' | 'thumbnail' | 'title' | 'description'
+      >
     >,
   ): Promise<Channel> {
     const supabase = this.supabaseService.getClient();

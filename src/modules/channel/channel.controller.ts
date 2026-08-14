@@ -48,9 +48,26 @@ export class ChannelController {
   @Get('channels')
   async getChannels() {
     try {
-      const channels = await this.channelDbService.getAllChannels();
+      const channels = await this.channelDbService.getAllChannels(true);
       return { channels };
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  @Get('channel/:channelId')
+  async getChannelById(@Param('channelId') channelId: string) {
+    try {
+      const channel = await this.channelDbService.getChannel(channelId);
+      if (!channel) {
+        throw new HttpException('Channel not found', HttpStatus.NOT_FOUND);
+      }
+      return { channel };
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : 'Unknown error';
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
@@ -66,9 +83,10 @@ export class ChannelController {
 
       const r2Keys = [
         this.r2StorageService.extractKey(channel.thumbnail),
-        ...channel.videos.map((video) =>
+        ...channel.videos.flatMap((video) => [
           this.r2StorageService.extractKey(video.audioPath),
-        ),
+          this.r2StorageService.extractKey(video.thumbnail),
+        ]),
       ].filter((key): key is string => key !== null);
 
       try {
