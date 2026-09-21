@@ -11,7 +11,7 @@ export class RssService {
     const feed = new Podcast({
       title: channelInfo.title || 'Podcast Channel',
       description:
-        channelInfo.summary || channelInfo.description || 'Podcast RSS Feed',
+        channelInfo.description || channelInfo.summary || 'Podcast RSS Feed',
       feedUrl: `${baseUrl}/rss/${channelInfo.id}`,
       siteUrl: channelInfo.url || baseUrl,
       imageUrl: channelInfo.thumbnail || '',
@@ -23,7 +23,7 @@ export class RssService {
         name: channelInfo.owner?.name || defaultAuthor,
         email: channelInfo.owner?.email || 'noreply@example.com',
       },
-      itunesSummary: channelInfo.summary || channelInfo.description || '',
+      itunesSummary: channelInfo.description || channelInfo.summary || '',
       itunesImage: channelInfo.thumbnail || '',
       itunesExplicit: false,
       itunesType: 'episodic',
