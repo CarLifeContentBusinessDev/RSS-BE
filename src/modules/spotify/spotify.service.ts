@@ -4,7 +4,7 @@ import {
   SpotifyEpisodesPage,
   SpotifyShow,
   SpotifyToken,
-} from 'src/types/spotify.types';
+} from '../../types/spotify.types';
 
 export type SpotifyProgressEvent =
   | { type: 'start'; total: number }

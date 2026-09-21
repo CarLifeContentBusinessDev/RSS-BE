@@ -3,7 +3,7 @@ import { SpotifyService } from '../spotify/spotify.service';
 import {
   ItunesSearchResponse,
   ItunesSearchResult,
-} from 'src/types/apple-podcasts.types';
+} from '../../types/apple-podcasts.types';
 
 @Injectable()
 export class ApplePodcastsService {

@@ -300,7 +300,13 @@ export class CustomController {
   )
   async updateChannel(
     @Param('channelId') channelId: string,
-    @Body() body: { title?: string; description?: string },
+    @Body()
+    body: {
+      title?: string;
+      description?: string;
+      author?: string;
+      copyright?: string;
+    },
     @UploadedFile() image?: UploadedMulterFile,
   ) {
     try {
@@ -314,7 +320,12 @@ export class CustomController {
 
       const channel = await this.customService.updateChannelMeta(
         channelId,
-        { title, description: body.description?.trim() || undefined },
+        {
+          title,
+          description: body.description?.trim() || undefined,
+          author: body.author?.trim() || undefined,
+          copyright: body.copyright?.trim() || undefined,
+        },
         image ? { buffer: image.buffer, mimetype: image.mimetype } : undefined,
       );
 

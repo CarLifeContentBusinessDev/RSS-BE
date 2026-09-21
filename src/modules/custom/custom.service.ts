@@ -1,12 +1,12 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { parseDurationToSeconds } from 'src/common/utils/duration.util';
-import { r2Config } from 'src/common/config/r2.config';
-import { ChannelDbService } from 'src/shared/services/channel-db.service';
-import { R2StorageService } from 'src/shared/services/r2-storage.service';
-import { Channel, Video } from 'src/types/channel.types';
-import type { Json } from 'src/types/database.types';
+import { parseDurationToSeconds } from '../../common/utils/duration.util';
+import { r2Config } from '../../common/config/r2.config';
+import { ChannelDbService } from '../../shared/services/channel-db.service';
+import { R2StorageService } from '../../shared/services/r2-storage.service';
+import { Channel, Video } from '../../types/channel.types';
+import type { Json } from '../../types/database.types';
 
 export interface CustomItemInput {
   title: string;
@@ -244,7 +244,12 @@ export class CustomService {
 
   async updateChannelMeta(
     channelId: string,
-    input: { title: string; description?: string },
+    input: {
+      title: string;
+      description?: string;
+      author?: string;
+      copyright?: string;
+    },
     image: UploadFile | undefined,
   ): Promise<Channel> {
     const channel = await this.findChannelOrThrow(channelId);
@@ -267,6 +272,8 @@ export class CustomService {
       {
         title: input.title,
         description: input.description ?? null,
+        author: input.author ?? null,
+        copyright: input.copyright ?? null,
         thumbnail,
       },
     );

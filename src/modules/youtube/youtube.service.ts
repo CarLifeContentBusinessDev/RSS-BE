@@ -1,8 +1,8 @@
 import {
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
   S3Client,
-  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 import { Injectable } from '@nestjs/common';
 import { constants, createReadStream } from 'fs';
@@ -17,11 +17,11 @@ import {
 } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join } from 'path';
-import { r2Config } from 'src/common/config/r2.config';
-import { ChannelDbService } from 'src/shared/services/channel-db.service';
-import { Video, Channel } from 'src/types/channel.types';
-import type { Json } from 'src/types/database.types';
-import { VideoInfo } from 'src/types/youtube.types';
+import { r2Config } from '../../common/config/r2.config';
+import { ChannelDbService } from '../../shared/services/channel-db.service';
+import { Channel, Video } from '../../types/channel.types';
+import type { Json } from '../../types/database.types';
+import { VideoInfo } from '../../types/youtube.types';
 import YTDlpWrap from 'yt-dlp-wrap';
 import ytpl from 'ytpl';
 
@@ -230,6 +230,7 @@ export class YoutubeService {
         }
       })()
         .catch((error) => {
+          console.error('[YouTube] yt-dlp 초기화 실패, 원본 에러:', error);
           this.ytDlpWrap = null;
           throw error;
         })
@@ -282,8 +283,11 @@ export class YoutubeService {
     // Prefer yt-dlp first so we get the most complete entry list.
     try {
       return await this.getCollectionInfoByYtDlp(url, 'playlist');
-    } catch {
-      // Fallback to ytpl below.
+    } catch (ytDlpError) {
+      console.error(
+        '[YouTube] yt-dlp playlist 조회 실패, ytpl로 fallback:',
+        ytDlpError instanceof Error ? ytDlpError.message : String(ytDlpError),
+      );
     }
 
     try {
@@ -361,6 +365,7 @@ export class YoutubeService {
         videoIds,
       };
     } catch (error) {
+      console.error('[YouTube] getCollectionInfoByYtDlp 원본 에러:', error);
       const originalMessage =
         fallbackError instanceof Error
           ? fallbackError.message
@@ -914,7 +919,7 @@ export class YoutubeService {
     }
 
     const metadata = this.aggregateMetadata(result.videos);
-    const parsedAuthor = this.parseAuthorInput(authorInput);
+    const parsedAuthor = this.parseOptionalStringInput(authorInput);
 
     if (result.type === 'video' && result.videos.length > 0) {
       const firstVideo = result.videos[0];
@@ -1017,6 +1022,9 @@ export class YoutubeService {
     signal?: AbortSignal,
     authorInput?: unknown,
     imageFile?: { buffer: Buffer; mimetype: string },
+    titleInput?: unknown,
+    descriptionInput?: unknown,
+    copyrightInput?: unknown,
   ): Promise<{ newEpisodes: number; totalEpisodes: number }> {
     const fullChannelId = `youtube-${channelId}`;
     const existingChannel =
@@ -1026,7 +1034,10 @@ export class YoutubeService {
       throw new Error('Channel not found');
     }
 
-    const parsedAuthor = this.parseAuthorInput(authorInput);
+    const parsedAuthor = this.parseOptionalStringInput(authorInput);
+    const parsedTitle = this.parseOptionalStringInput(titleInput);
+    const parsedDescription = this.parseOptionalStringInput(descriptionInput);
+    const parsedCopyright = this.parseOptionalStringInput(copyrightInput);
     const thumbnail = imageFile
       ? await this.uploadChannelImage(fullChannelId, imageFile)
       : undefined;
@@ -1051,10 +1062,24 @@ export class YoutubeService {
     const rssUrl = `${baseUrl}/rss/${fullChannelId}`;
 
     if (newVideos.length === 0) {
-      if (thumbnail) {
-        await this.channelDbService.updateChannelMetadata(fullChannelId, {
-          thumbnail,
-        });
+      const overrideUpdates: {
+        thumbnail?: string;
+        title?: string;
+        description?: string | null;
+        copyright?: string | null;
+      } = {};
+      if (thumbnail) overrideUpdates.thumbnail = thumbnail;
+      if (parsedTitle) overrideUpdates.title = parsedTitle;
+      if (parsedDescription !== undefined)
+        overrideUpdates.description = parsedDescription;
+      if (parsedCopyright !== undefined)
+        overrideUpdates.copyright = parsedCopyright;
+
+      if (Object.keys(overrideUpdates).length > 0) {
+        await this.channelDbService.updateChannelMetadata(
+          fullChannelId,
+          overrideUpdates,
+        );
       }
       this.safeCallback(
         onProgress,
@@ -1093,6 +1118,9 @@ export class YoutubeService {
       publisher?: string;
       host?: string;
       thumbnail?: string;
+      title?: string;
+      description?: string | null;
+      copyright?: string | null;
     } = {};
 
     if (parsedAuthor !== undefined) {
@@ -1114,6 +1142,18 @@ export class YoutubeService {
 
     if (thumbnail) {
       metadataUpdates.thumbnail = thumbnail;
+    }
+
+    if (parsedTitle) {
+      metadataUpdates.title = parsedTitle;
+    }
+
+    if (parsedDescription !== undefined) {
+      metadataUpdates.description = parsedDescription;
+    }
+
+    if (parsedCopyright !== undefined) {
+      metadataUpdates.copyright = parsedCopyright;
     }
 
     if (Object.keys(metadataUpdates).length > 0) {
@@ -1141,20 +1181,44 @@ export class YoutubeService {
     };
   }
 
-  // Update only channel author/thumbnail without fetching/updating videos.
-  async updateChannelAuthorOnly(
+  async updateChannelMetadataOnly(
     channelId: string,
-    authorInput: unknown,
+    fields: {
+      author?: unknown;
+      title?: unknown;
+      description?: unknown;
+      copyright?: unknown;
+    },
     imageFile?: { buffer: Buffer; mimetype: string },
   ): Promise<void> {
     const fullChannelId = `youtube-${channelId}`;
-    const parsedAuthor = this.parseAuthorInput(authorInput);
+    const parsedAuthor = this.parseOptionalStringInput(fields.author);
+    const parsedTitle = this.parseOptionalStringInput(fields.title);
+    const parsedDescription = this.parseOptionalStringInput(fields.description);
+    const parsedCopyright = this.parseOptionalStringInput(fields.copyright);
 
-    const metadataUpdates: { author?: string | null; thumbnail?: string } = {};
+    const metadataUpdates: {
+      author?: string | null;
+      title?: string;
+      description?: string | null;
+      copyright?: string | null;
+      thumbnail?: string;
+    } = {};
 
-    // parsedAuthor: undefined => no-op, null => clear author, string => set
     if (parsedAuthor !== undefined) {
       metadataUpdates.author = parsedAuthor;
+    }
+
+    if (parsedTitle) {
+      metadataUpdates.title = parsedTitle;
+    }
+
+    if (parsedDescription !== undefined) {
+      metadataUpdates.description = parsedDescription;
+    }
+
+    if (parsedCopyright !== undefined) {
+      metadataUpdates.copyright = parsedCopyright;
     }
 
     if (imageFile) {
@@ -1213,20 +1277,19 @@ export class YoutubeService {
     }
   }
 
-  private parseAuthorInput(authorInput: unknown): string | null | undefined {
-    if (authorInput === undefined) {
+  private parseOptionalStringInput(input: unknown): string | null | undefined {
+    if (input === undefined) {
       return undefined;
     }
 
-    if (typeof authorInput !== 'string') {
+    if (typeof input !== 'string') {
       return undefined;
     }
 
-    const trimmed = authorInput.trim();
+    const trimmed = input.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
-  // Expose channel lookup for controller-level decisions (author-only shortcut)
   async getChannel(channelId: string): Promise<Channel | null> {
     const fullChannelId = `youtube-${channelId}`;
     return this.channelDbService.getChannel(fullChannelId);

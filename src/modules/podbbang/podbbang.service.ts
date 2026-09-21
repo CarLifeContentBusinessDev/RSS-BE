@@ -3,7 +3,7 @@ import * as https from 'https';
 import {
   PodbbangChannelResponse,
   PodbbangEpisodesResponse,
-} from 'src/types/podbbang.types';
+} from '../../types/podbbang.types';
 
 export type PodbbangProgressEvent =
   | { type: 'start'; total: number }

@@ -163,7 +163,13 @@ export class ChannelDbService {
     metadata: Partial<
       Pick<
         ChannelUpdate,
-        'author' | 'publisher' | 'host' | 'thumbnail' | 'title' | 'description'
+        | 'author'
+        | 'publisher'
+        | 'host'
+        | 'thumbnail'
+        | 'title'
+        | 'description'
+        | 'copyright'
       >
     >,
   ): Promise<Channel> {

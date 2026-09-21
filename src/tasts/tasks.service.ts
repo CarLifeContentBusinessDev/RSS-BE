@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ChannelDbService } from '../shared/services/channel-db.service';
-import { PodbbangService } from 'src/modules/podbbang/podbbang.service';
-import { SpotifyService } from 'src/modules/spotify/spotify.service';
+import { PodbbangService } from '../modules/podbbang/podbbang.service';
+import { SpotifyService } from '../modules/spotify/spotify.service';
 
 @Injectable()
 export class TasksService {

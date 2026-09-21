@@ -1,4 +1,3 @@
-// backend/src/modules/youtube/youtube.controller.ts
 import {
   Controller,
   Post,
@@ -35,12 +34,12 @@ export class YoutubeController {
     this.BASE_URL = process.env.BASE_URL || `http://localhost:${port}`;
   }
 
-  private hasAuthorField(body: unknown): body is { author: unknown } {
+  private hasField(body: unknown, key: string): boolean {
     if (typeof body !== 'object' || body === null) {
       return false;
     }
 
-    return 'author' in body;
+    return key in body;
   }
 
   private validateImage(image: UploadedImageFile): void {
@@ -138,7 +137,9 @@ export class YoutubeController {
         this.validateImage(image);
       }
 
-      const authorInput = this.hasAuthorField(body) ? body.author : undefined;
+      const authorInput = this.hasField(body, 'author')
+        ? body.author
+        : undefined;
 
       const rssUrl = await this.youtubeService.processAndSave(
         url,
@@ -160,6 +161,7 @@ export class YoutubeController {
         throw new HttpException(message, HttpStatus.BAD_REQUEST);
       }
 
+      console.error('[YouTube] /process 처리 에러:', message);
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
@@ -251,33 +253,58 @@ export class YoutubeController {
         this.validateImage(image);
       }
 
-      // allow two modes: author/image-only update (fast) or full update with url
-      const hasAuthor = this.hasAuthorField(body);
-      const authorInput = hasAuthor ? body.author : undefined;
+      const hasAuthor = this.hasField(body, 'author');
+      const hasTitle = this.hasField(body, 'title');
+      const hasDescription = this.hasField(body, 'description');
+      const hasCopyright = this.hasField(body, 'copyright');
+      const bodyObj = body as
+        | {
+            url?: string;
+            author?: unknown;
+            title?: unknown;
+            description?: unknown;
+            copyright?: unknown;
+          }
+        | undefined;
+      const authorInput = hasAuthor ? bodyObj?.author : undefined;
+      const titleInput = hasTitle ? bodyObj?.title : undefined;
+      const descriptionInput = hasDescription
+        ? bodyObj?.description
+        : undefined;
+      const copyrightInput = hasCopyright ? bodyObj?.copyright : undefined;
+      const hasMetadataOverride =
+        hasAuthor || hasTitle || hasDescription || hasCopyright;
       const imageInput = image
         ? { buffer: image.buffer, mimetype: image.mimetype }
         : undefined;
 
-      const bodyObj = body as { url?: string } | undefined;
       const url = bodyObj?.url;
 
-      if ((hasAuthor || imageInput) && !url) {
-        // author/image-only update requested (no url provided)
-        await this.youtubeService.updateChannelAuthorOnly(
+      if ((hasMetadataOverride || imageInput) && !url) {
+        await this.youtubeService.updateChannelMetadataOnly(
           channelId,
-          authorInput,
+          {
+            author: authorInput,
+            title: titleInput,
+            description: descriptionInput,
+            copyright: copyrightInput,
+          },
           imageInput,
         );
         return { success: true, updated: 0 };
       }
 
-      // If author/image provided and url equals stored channel url, treat as author/image-only to avoid full processing
-      if ((hasAuthor || imageInput) && typeof url === 'string') {
+      if ((hasMetadataOverride || imageInput) && typeof url === 'string') {
         const existing = await this.youtubeService.getChannel(channelId);
         if (existing && existing.url === url) {
-          await this.youtubeService.updateChannelAuthorOnly(
+          await this.youtubeService.updateChannelMetadataOnly(
             channelId,
-            authorInput,
+            {
+              author: authorInput,
+              title: titleInput,
+              description: descriptionInput,
+              copyright: copyrightInput,
+            },
             imageInput,
           );
           return { success: true, updated: 0 };
@@ -295,6 +322,9 @@ export class YoutubeController {
         undefined,
         authorInput,
         imageInput,
+        titleInput,
+        descriptionInput,
+        copyrightInput,
       );
 
       return {
@@ -304,6 +334,7 @@ export class YoutubeController {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[YouTube] /update 처리 에러:', message);
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }

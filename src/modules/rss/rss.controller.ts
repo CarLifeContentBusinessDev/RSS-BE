@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { RssService } from './rss.service';
-import { ChannelDbService } from 'src/shared/services/channel-db.service';
+import { ChannelDbService } from '../../shared/services/channel-db.service';
 
 @Controller('rss')
 export class RssController {
